@@ -1,0 +1,262 @@
+/* ARISE: 그림자 군단 디펜스 — style.css */
+
+:root {
+  --bg: #07080f;
+  --panel: #10131f;
+  --panel-2: #171b2b;
+  --line: #262c44;
+  --text: #e6e8f2;
+  --sub: #8b91b0;
+  --accent: #8b6cff;
+  --accent-2: #5ad1ff;
+  --ok: #3ddc97;
+  --warn: #ff5c7a;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+}
+
+body {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+#app {
+  position: relative;
+  width: 100%;
+  max-width: 1000px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px 20px 12px;
+  box-shadow: 0 0 40px rgba(139, 108, 255, 0.12);
+}
+
+.hidden { display: none !important; }
+
+/* ---------- HUD ---------- */
+#hud {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.hud-item {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 14px;
+  color: var(--sub);
+}
+
+.hud-item b {
+  color: var(--text);
+  margin-left: 6px;
+  font-size: 16px;
+}
+
+#hud-base.danger { color: var(--warn); }
+
+.hud-status {
+  margin-left: auto;
+  color: var(--accent-2);
+  font-weight: 700;
+}
+
+#hint {
+  min-height: 20px;
+  margin: 10px 2px 8px;
+  font-size: 13px;
+  color: var(--sub);
+}
+
+/* ---------- 전장 ---------- */
+#field-wrap { position: relative; }
+
+#field {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+}
+
+/* 메시지 알림: 평소에는 완전히 숨기고(display: none), 메시지가 있을 때만 표시.
+   나타나고 사라지는 애니메이션 없음 */
+.toast {
+  display: none;
+  position: absolute;
+  left: 50%;
+  top: 14px;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: rgba(16, 19, 31, 0.92);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 14px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.toast.show { display: block; }
+.toast.ok { border-color: var(--ok); color: var(--ok); }
+.toast.warn { border-color: var(--warn); color: var(--warn); }
+
+/* ---------- 하단 조작부 ---------- */
+#controls {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+#shadow-cards {
+  display: flex;
+  gap: 10px;
+  flex: 1;
+}
+
+.card {
+  --card-color: var(--accent);
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 2px solid var(--line);
+  border-left: 6px solid var(--card-color);
+  border-radius: 10px;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: border-color 0.1s, transform 0.1s;
+}
+
+.card:hover { transform: translateY(-2px); }
+.card.selected { border-color: var(--card-color); box-shadow: 0 0 14px var(--card-color); }
+.card.poor { opacity: 0.45; }
+
+.card-key {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  font-size: 11px;
+  color: var(--sub);
+}
+
+.card-name { font-size: 16px; font-weight: 700; }
+.card-role { font-size: 12px; color: var(--card-color); }
+.card-stats { font-size: 11px; color: var(--sub); }
+.card-cost { font-size: 13px; font-weight: 700; color: var(--accent-2); margin-top: 2px; }
+
+.btn-primary,
+.btn-secondary {
+  font: inherit;
+  font-weight: 700;
+  border-radius: 10px;
+  padding: 12px 22px;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  font-size: 16px;
+}
+
+.btn-primary:hover { filter: brightness(1.15); }
+
+.btn-secondary {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--sub);
+  font-size: 14px;
+}
+
+.btn-secondary:hover { color: var(--text); border-color: var(--sub); }
+
+#btn-start-wave { min-width: 160px; }
+
+.keys {
+  margin: 10px 2px 0;
+  font-size: 12px;
+  color: var(--sub);
+  text-align: center;
+}
+
+/* ---------- 오버레이 ---------- */
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 6, 12, 0.82);
+  border-radius: 14px;
+  z-index: 10;
+}
+
+.panel {
+  text-align: center;
+  padding: 32px 40px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  max-width: 520px;
+}
+
+.eyebrow { font-size: 12px; color: var(--sub); margin: 0 0 12px; }
+
+h1 {
+  margin: 0;
+  font-size: 34px;
+  letter-spacing: 1px;
+  white-space: nowrap;   /* 제목이 두 줄로 끊기지 않도록 */
+  color: var(--accent);
+  text-shadow: 0 0 18px rgba(139, 108, 255, 0.6);
+}
+
+h2 { margin: 0 0 8px; font-size: 28px; }
+
+.desc { color: var(--sub); line-height: 1.6; margin: 16px 0 24px; }
+
+.overlay-buttons { display: flex; gap: 10px; justify-content: center; }
+
+#overlay-result[data-kind="victory"] h2 { color: var(--ok); }
+#overlay-result[data-kind="defeat"] h2 { color: var(--warn); }
+#overlay-result[data-kind="wave_clear"] h2 { color: var(--accent-2); }
+
+/* ---------- 데이터 오류 ---------- */
+#data-error {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: #1a0b12;
+  border: 2px solid var(--warn);
+  border-radius: 14px;
+  padding: 24px;
+  overflow: auto;
+}
+
+#data-error h2 { color: var(--warn); }
+#data-error li { margin: 4px 0; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }

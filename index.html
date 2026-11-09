@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Arise:그림자군단 디펜스</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+
+    <!-- 상단 HUD -->
+    <header id="hud">
+      <div class="hud-item">WAVE <b id="hud-wave">1 / 5</b></div>
+      <div class="hud-item">그림자 에너지 <b id="hud-energy">100 / 150</b></div>
+      <div class="hud-item">기지 HP <b id="hud-base">10 / 10</b></div>
+      <div class="hud-item hud-status" id="hud-status">대기</div>
+    </header>
+    <p id="hint"></p>
+
+    <!-- 전장 -->
+    <div id="field-wrap">
+      <canvas id="field" width="960" height="450"></canvas>
+      <div id="toast" class="toast"></div>
+    </div>
+
+    <!-- 하단 조작부 -->
+    <footer id="controls">
+      <div id="shadow-cards"></div>
+      <button id="btn-start-wave" type="button" class="btn-primary hidden">WAVE 1 시작</button>
+    </footer>
+    <p class="keys">1·2·3 그림자 선택 · 좌클릭 배치 · 그림자 우클릭 회수(준비 단계) · 빈 곳 우클릭 선택 해제 · D 사거리 표시</p>
+
+    <!-- 타이틀 -->
+    <div id="overlay-title" class="overlay">
+      <div class="panel">
+        <p class="eyebrow">나 혼자만 레벨업 IP 기반 비공식 팬 제작 포트폴리오</p>
+        <h1>Arise:그림자군단 디펜스</h1>
+        <p class="desc">그림자 에너지로 군단을 배치해 3개 라인으로 밀려오는<br>5개의 웨이브에서 기지를 지켜내세요.</p>
+        <div class="overlay-buttons">
+          <button id="btn-play" type="button" class="btn-primary">게임 시작</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 웨이브 완료 / 승리 / 패배 -->
+    <div id="overlay-result" class="overlay hidden">
+      <div class="panel">
+        <h2 id="result-title"></h2>
+        <p id="result-desc" class="desc"></p>
+        <div class="overlay-buttons">
+          <button id="btn-result-primary" type="button" class="btn-primary"></button>
+          <button id="btn-result-title" type="button" class="btn-secondary">타이틀로</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- GAME_DATA 오류 표시 -->
+    <div id="data-error" class="hidden"></div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
