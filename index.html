@@ -36,6 +36,23 @@
           <button id="btn-extract" type="button" class="btn-primary">일어나라!</button>
         </div>
       </div>
+
+      <!-- 그림자 상세 정보 / 해체 패널: 그림자를 클릭하면 표시 -->
+      <div id="unit-panel" class="extract-panel unit-panel hidden">
+        <p id="unit-kind" class="extract-eyebrow"></p>
+        <h3 id="unit-name"></h3>
+        <p id="unit-stats" class="extract-line"></p>
+        <p id="unit-state" class="extract-line"></p>
+        <p id="unit-refund" class="extract-cost"></p>
+        <div id="unit-actions" class="extract-buttons">
+          <button id="btn-unit-close" type="button" class="btn-secondary">닫기</button>
+          <button id="btn-dismantle" type="button" class="btn-danger">해체</button>
+        </div>
+        <div id="unit-confirm" class="extract-buttons hidden">
+          <button id="btn-dismantle-cancel" type="button" class="btn-secondary">취소</button>
+          <button id="btn-dismantle-confirm" type="button" class="btn-danger">해체 확인</button>
+        </div>
+      </div>
     </div>
 
     <!-- 하단 조작부 -->
@@ -43,7 +60,7 @@
       <div id="shadow-cards"></div>
       <button id="btn-start-wave" type="button" class="btn-primary hidden">WAVE 1 시작</button>
     </footer>
-    <p class="keys">1·2·3 기본 그림자 선택 · 좌클릭 배치 · 잔영 클릭 → 추출 · 기본 그림자 우클릭 회수(준비 단계) · Esc/우클릭 선택 해제 · D 범위 표시</p>
+    <p class="keys">1·2·3 기본 그림자 선택 · 좌클릭 배치 · 잔영 클릭 → 추출 · 그림자 클릭 → 해체 · 기본 그림자 우클릭 회수(준비 단계) · Esc/우클릭 선택 해제 · D 범위 표시</p>
 
     <!-- 타이틀 -->
     <div id="overlay-title" class="overlay">

@@ -28,6 +28,7 @@ const GAME_DATA = {
     killReward: 10,
     waveStartBonus: 20,    // 2웨이브부터 [웨이브 시작]을 누를 때 지급
     recallRefundRate: 1.0, // 회수 시 환불 비율 (1.0 = 전액). 이번 준비 단계에서 배치한 기본 그림자만 회수 가능
+    dismantleRefundRate: 0.5, // 해체 시 반환 비율. 생성 때 실제 소비한 에너지 기준, 반올림 (SD-DISMANTLE)
     coreHp: 10,
     maxArmy: 15,           // 전체 군단 최대 수 (기본 + 추출)
     maxBasic: 3,           // 기본 그림자 최대 수
@@ -165,9 +166,13 @@ const REASON_TEXT = Object.freeze({
   RECALL_EMPTY:      '회수할 그림자가 없습니다.',
   // 추출
   EXTRACT_GONE:      '잔영이 사라졌습니다.',
+  // 해체
+  DISMANTLE_GONE:    '이미 사라진 그림자입니다.',
+  UNIT_LOST:         '선택한 그림자가 쓰러졌습니다.',
 });
 
 const ROLE_TEXT = Object.freeze({ tank: '탱커', damage: '딜러', area: '광역' });
+const AI_TEXT = Object.freeze({ SPAWN: '추출 중', IDLE: '대기', CHASE: '추격', ATTACK: '공격', RETURN: '복귀', DEAD: '사망' });
 
 function createInitialState() {
   const c = GAME_DATA.config;
@@ -181,6 +186,7 @@ function createInitialState() {
     maxCoreHp: c.coreHp,
     selectedShadowId: null,   // 배치할 기본 그림자 카드
     selectedRemnantUid: null, // 추출 패널에 띄운 잔영
+    selectedUnitUid: null,    // 상세 정보(해체) 패널에 띄운 그림자
     basicUnits: [],           // 기본 소환 그림자 (고정)
     extractedUnits: [],       // 추출 그림자 (자동 추적)
     enemies: [],
@@ -194,6 +200,7 @@ function createInitialState() {
     stats: {
       kills: 0, waveKills: 0,
       extractionAttempts: 0, extractionSuccesses: 0,
+      dismantles: 0, energyRefunded: 0,
       energySpent: 0, coreDamageTaken: 0,
     },
   };
@@ -309,7 +316,7 @@ function summonShadow(state, shadowId, x, y) {
     targetType: d.targetType,
     cooldown: 0,          // 생성 직후 첫 공격 가능
     alive: true,
-    paidCost: d.cost,     // 회수 시 환불 기준
+    energyCostPaid: d.cost, // 실제 소비 에너지 → 회수·해체 반환 기준
     // 준비 단계에서 배치한 그림자만 회수 가능. 웨이브가 시작되면 false로 잠김
     recallable: state.status === STATUS.PREPARATION,
   };
@@ -340,12 +347,66 @@ function canRecall(state, unit) {
 function recallShadow(state, unit) {
   const check = canRecall(state, unit);
   if (!check.ok) return check;
-  const refund = Math.round(unit.paidCost * GAME_DATA.config.recallRefundRate);
+  const refund = Math.round(unit.energyCostPaid * GAME_DATA.config.recallRefundRate);
   unit.alive = false;
   state.basicUnits = state.basicUnits.filter((u) => u.uid !== unit.uid);
+  if (state.selectedUnitUid === unit.uid) state.selectedUnitUid = null;
   addEnergy(state, refund);
   state.stats.energySpent -= refund;
   return { ok: true, unit, refund };
+}
+
+/* ---------- 그림자 해체 (SD-DISMANTLE) ---------- */
+
+function findShadowUnit(state, uid) {
+  if (uid === null || uid === undefined) return null;
+  return getAllShadows(state).find((u) => u.uid === uid && u.alive) || null;
+}
+
+// (x, y)에 있는 그림자: 기본(사각형) 우선, 없으면 추출(원)
+function getShadowAt(state, x, y) {
+  const basic = getBasicAt(state, x, y);
+  if (basic) return basic;
+  let best = null;
+  let bestDist = Infinity;
+  for (const s of state.extractedUnits) {
+    if (!s.alive) continue;
+    const d = dist(x, y, s.x, s.y);
+    if (d <= 16 && d < bestDist) { best = s; bestDist = d; }
+  }
+  return best;
+}
+
+// 반환 에너지 = round(실제 소비 에너지 × 0.5)  → 0.5 이상 올림
+function calculateDismantleRefund(unit) {
+  return Math.round(unit.energyCostPaid * GAME_DATA.config.dismantleRefundRate);
+}
+
+// 준비·전투 단계에서 살아 있는 모든 그림자(기본 + 추출) 해체 가능
+function canDismantle(state, unitUid) {
+  if (!isFieldActive(state)) return { ok: false, reason: 'INVALID_STATUS' };   // 일시정지·승리·패배 등 불가
+  const unit = findShadowUnit(state, unitUid);
+  if (!unit) return { ok: false, reason: 'DISMANTLE_GONE' };                  // 사망·이미 해체
+  return { ok: true, unit, refund: calculateDismantleRefund(unit) };
+}
+
+// 확인 버튼을 누른 순간 다시 검사 → 그림자 제거 → 군단 슬롯 즉시 확보 → 에너지 반환(상한 150)
+function dismantleShadow(state, unitUid) {
+  const check = canDismantle(state, unitUid);
+  if (!check.ok) return check;
+  const { unit, refund } = check;
+  unit.alive = false;
+  if (unit.aiState) unit.aiState = AI.DEAD;
+  state.basicUnits = state.basicUnits.filter((u) => u.uid !== unit.uid);
+  state.extractedUnits = state.extractedUnits.filter((u) => u.uid !== unit.uid);
+  if (state.selectedUnitUid === unit.uid) state.selectedUnitUid = null;
+  // 이 그림자를 노리던 적은 다음 틱에 대상을 다시 찾음 (findEnemyTarget이 매 틱 재탐색)
+  const before = state.energy;
+  addEnergy(state, refund);
+  const gained = state.energy - before;   // 상한에 걸리면 실제 반환량은 더 작음
+  state.stats.dismantles += 1;
+  state.stats.energyRefunded += gained;
+  return { ok: true, unit, refund, gained };
 }
 
 /* ---------- 잔영 / 그림자 추출 ---------- */
@@ -424,7 +485,7 @@ function extractShadow(state, remnantUid) {
     targetId: null,
     cooldown: 0,
     alive: true,
-    paidCost: data.cost,
+    energyCostPaid: data.cost, // 실제 소비 에너지 → 해체 반환 기준
   };
   clampToField(unit);   // 추출 그림자는 배치 제한 없이 맵 범위만 검사
   unit.originX = unit.x;
@@ -705,6 +766,11 @@ function cleanupDead(state) {
   state.enemies = state.enemies.filter((e) => e.alive);
   state.basicUnits = state.basicUnits.filter((u) => u.alive);
   state.extractedUnits = state.extractedUnits.filter((u) => u.alive);
+  // 상세 패널(해체 확인 포함)을 띄운 그림자가 쓰러지면 선택 해제. 사망 시 반환 없음
+  if (state.selectedUnitUid !== null && !findShadowUnit(state, state.selectedUnitUid)) {
+    state.selectedUnitUid = null;
+    state.events.push('UNIT_LOST');
+  }
 }
 
 function checkWaveComplete(state) {
@@ -740,6 +806,7 @@ function validateGameData(data) {
   if (!Number.isInteger(c.maxArmy) || c.maxArmy < 1) errors.push('config: maxArmy는 1 이상의 정수여야 합니다.');
   if (!Number.isInteger(c.maxBasic) || c.maxBasic < 1 || c.maxBasic > c.maxArmy) errors.push('config: maxBasic은 1 이상, maxArmy 이하의 정수여야 합니다.');
   if (typeof c.recallRefundRate !== 'number' || c.recallRefundRate < 0 || c.recallRefundRate > 1) errors.push('config: recallRefundRate는 0~1 사이 숫자여야 합니다.');
+  if (typeof c.dismantleRefundRate !== 'number' || c.dismantleRefundRate < 0 || c.dismantleRefundRate > 1) errors.push('config: dismantleRefundRate는 0~1 사이 숫자여야 합니다.');
 
   if (!isPos(F.width) || !isPos(F.height)) errors.push('field: width / height가 올바르지 않습니다.');
   if (!F.core || !isPos(F.core.radius)) errors.push('field: core.radius가 올바르지 않습니다.');
@@ -964,7 +1031,12 @@ function render(ctx, state, view) {
     ctx.fillStyle = d ? d.color : '#888';
     drawRoundRect(ctx, u.x - 15, u.y - 15, 30, 30, 7);
     ctx.fill();
-    if (view.hoverBasicUid === u.uid && canRecall(state, u).ok) {
+    if (state.selectedUnitUid === u.uid) {
+      ctx.strokeStyle = COLORS.selected;   // 상세 패널을 띄운 그림자
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    } else if (view.hoverUnitUid === u.uid && canRecall(state, u).ok) {
       ctx.strokeStyle = COLORS.recall;   // 회수 가능한 그림자에 마우스를 올리면 노란 테두리
       ctx.lineWidth = 3;
       ctx.stroke();
@@ -993,6 +1065,12 @@ function render(ctx, state, view) {
     ctx.lineWidth = 1;
     drawLabel(ctx, src ? src.name[0] : '?', s.x, s.y + 1, COLORS.hpExtracted, 'bold 12px sans-serif');
     ctx.globalAlpha = 1;
+    if (state.selectedUnitUid === s.uid || view.hoverUnitUid === s.uid) {
+      ctx.strokeStyle = state.selectedUnitUid === s.uid ? COLORS.selected : COLORS.remnantRing;
+      ctx.lineWidth = state.selectedUnitUid === s.uid ? 2 : 1;
+      drawCircle(ctx, s.x, s.y, r + 5); ctx.stroke();
+      ctx.lineWidth = 1;
+    }
     drawHpBar(ctx, s.x, s.y - r - 9, 28, s.hp / s.maxHp, COLORS.hpExtracted);
   }
 
@@ -1056,7 +1134,8 @@ const game = {
   canvas: null,
   ctx: null,
   ui: {},
-  view: { mouse: null, hoverRemnantUid: null, hoverBasicUid: null, showRanges: false, time: 0 },
+  // confirmDismantleUid: 해체 확인 단계에 들어간 그림자 (UI 전용 상태)
+  view: { mouse: null, hoverRemnantUid: null, hoverUnitUid: null, showRanges: false, time: 0, confirmDismantleUid: null },
   toastTimer: null,
   lastTime: null,
   accumulator: 0,
@@ -1101,12 +1180,16 @@ function selectShadow(id) {
   const st = game.state;
   if (!isFieldActive(st)) return;
   st.selectedShadowId = st.selectedShadowId === id ? null : id;  // 같은 카드 다시 누르면 선택 해제
-  if (st.selectedShadowId) st.selectedRemnantUid = null;         // 카드 선택 시 추출 패널 닫기
+  if (st.selectedShadowId) {                                     // 카드 선택 시 다른 패널 닫기
+    st.selectedRemnantUid = null;
+    st.selectedUnitUid = null;
+  }
 }
 
 function clearSelection() {
   game.state.selectedShadowId = null;
   game.state.selectedRemnantUid = null;
+  game.state.selectedUnitUid = null;
 }
 
 // 우클릭(또는 Mac Control + 클릭)
@@ -1146,17 +1229,44 @@ function onCanvasClick(evt) {
   if (remnant) {
     st.selectedRemnantUid = remnant.uid;
     st.selectedShadowId = null;
+    st.selectedUnitUid = null;
     return;
   }
-  // 2순위: 카드 선택 중이면 배치
+  // 2순위: 그림자 클릭 → 상세 정보 / 해체 패널
+  const unit = getShadowAt(st, p.x, p.y);
+  if (unit) {
+    st.selectedUnitUid = unit.uid;
+    st.selectedShadowId = null;
+    st.selectedRemnantUid = null;
+    return;
+  }
+  // 3순위: 카드 선택 중이면 배치
   if (st.selectedShadowId) {
     const result = summonShadow(st, st.selectedShadowId, p.x, p.y);
     if (result.ok) showToast(`${findShadowData(result.unit.typeId).name} 소환`, 'ok');
     else showToast(REASON_TEXT[result.reason] || result.reason, 'warn');
     return;
   }
-  // 빈 곳 클릭: 추출 패널 닫기
+  // 빈 곳 클릭: 패널 닫기
   st.selectedRemnantUid = null;
+  st.selectedUnitUid = null;
+}
+
+// 해체 → 확인 → 실행. 확인 중에도 전투는 계속되며, 그 사이 그림자가 쓰러지면 해체 실패
+function onDismantleConfirm() {
+  const st = game.state;
+  const uid = game.view.confirmDismantleUid;
+  game.view.confirmDismantleUid = null;
+  if (uid === null) return;   // 연속 클릭 방지: 이미 처리된 경우 무시
+  const result = dismantleShadow(st, uid);
+  if (result.ok) {
+    const name = result.unit.kind === 'basic'
+      ? findShadowData(result.unit.typeId).name
+      : `${findEnemyData(result.unit.sourceEnemyId).name} 그림자`;
+    showToast(`${name} 해체 (에너지 +${result.gained})`, 'ok');
+  } else {
+    showToast(REASON_TEXT[result.reason] || result.reason, 'warn');
+  }
 }
 
 function onExtract() {
@@ -1207,17 +1317,17 @@ function onMouseMove(evt) {
   const p = toFieldPos(evt);
   const st = game.state;
   const remnant = isFieldActive(st) ? getRemnantAt(st, p.x, p.y) : null;
-  const basic = isFieldActive(st) ? getBasicAt(st, p.x, p.y) : null;
+  const unit = isFieldActive(st) && !remnant ? getShadowAt(st, p.x, p.y) : null;
   game.view.mouse = p;
   game.view.hoverRemnantUid = remnant ? remnant.uid : null;
-  game.view.hoverBasicUid = basic ? basic.uid : null;
-  game.canvas.style.cursor = remnant ? 'pointer' : st.selectedShadowId ? 'crosshair' : 'default';
+  game.view.hoverUnitUid = unit ? unit.uid : null;
+  game.canvas.style.cursor = remnant || unit ? 'pointer' : st.selectedShadowId ? 'crosshair' : 'default';
 }
 
 function onMouseLeave() {
   game.view.mouse = null;
   game.view.hoverRemnantUid = null;
-  game.view.hoverBasicUid = null;
+  game.view.hoverUnitUid = null;
 }
 
 function setText(el, text) { if (el.textContent !== text) el.textContent = text; }
@@ -1238,8 +1348,42 @@ function hintText(st) {
 function consumeEvents(st) {
   for (const ev of st.events) {
     if (ev === 'REMNANT_EXPIRED') showToast(REASON_TEXT.EXTRACT_GONE, 'warn');
+    if (ev === 'UNIT_LOST') showToast(REASON_TEXT.UNIT_LOST, 'warn');
   }
   st.events.length = 0;
+}
+
+// 그림자 상세 정보 + 해체 패널
+function syncUnitPanel(st) {
+  const ui = game.ui;
+  const unit = isFieldActive(st) ? findShadowUnit(st, st.selectedUnitUid) : null;
+  if (!unit || game.view.confirmDismantleUid !== unit.uid) game.view.confirmDismantleUid = null;
+  setHidden(ui.unitPanel, !unit);
+  if (!unit) return;
+
+  if (unit.kind === 'basic') {
+    const d = findShadowData(unit.typeId);
+    setText(ui.unitKind, '기본 그림자');
+    setText(ui.unitName, `${d.name} · ${ROLE_TEXT[d.role] || d.role}`);
+    setText(ui.unitStats, `HP ${unit.hp}/${unit.maxHp} · ATK ${unit.attack} · 사거리 ${unit.attackRange}`);
+    setText(ui.unitState, canRecall(st, unit).ok ? '이번 준비 단계 배치 · 우클릭 회수 시 전액 환불' : '고정 배치');
+  } else {
+    const src = findEnemyData(unit.sourceEnemyId);
+    setText(ui.unitKind, '추출 그림자');
+    setText(ui.unitName, `${src.name} 몬스터의 그림자`);
+    setText(ui.unitStats, `HP ${unit.hp}/${unit.maxHp} · ATK ${unit.attack} · 이동 속도 ${unit.moveSpeed}`);
+    setText(ui.unitState, `상태: ${AI_TEXT[unit.aiState] || unit.aiState}`);
+  }
+
+  const refund = calculateDismantleRefund(unit);
+  const actual = Math.min(refund, st.maxEnergy - st.energy);
+  const refundText = actual < refund
+    ? `해체 시 에너지 +${actual} (반환 ${refund}, 상한 ${st.maxEnergy})`
+    : `해체 시 에너지 +${refund} (소비 ${unit.energyCostPaid}의 50%)`;
+  const confirming = game.view.confirmDismantleUid === unit.uid;
+  setText(ui.unitRefund, confirming ? `정말 해체할까요? ${refundText.replace('해체 시 ', '')}` : refundText);
+  setHidden(ui.unitActions, confirming);
+  setHidden(ui.unitConfirm, !confirming);
 }
 
 function syncExtractPanel(st) {
@@ -1282,6 +1426,7 @@ function syncUI() {
   setText(ui.btnStart, `WAVE ${st.wave} 시작`);
 
   syncExtractPanel(st);
+  syncUnitPanel(st);
 
   setHidden(ui.overlayTitle, st.status !== STATUS.READY);
   const showResult = st.status === STATUS.WAVE_CLEAR || st.status === STATUS.VICTORY || st.status === STATUS.DEFEAT;
@@ -1352,6 +1497,8 @@ function boot() {
     hint: $('hint'), toast: $('toast'), cards: $('shadow-cards'), btnStart: $('btn-start-wave'),
     extractPanel: $('extract-panel'), extractName: $('extract-name'), extractStats: $('extract-stats'),
     extractCost: $('extract-cost'), extractTime: $('extract-time'), btnExtract: $('btn-extract'),
+    unitPanel: $('unit-panel'), unitKind: $('unit-kind'), unitName: $('unit-name'), unitStats: $('unit-stats'),
+    unitState: $('unit-state'), unitRefund: $('unit-refund'), unitActions: $('unit-actions'), unitConfirm: $('unit-confirm'),
     overlayTitle: $('overlay-title'), overlayResult: $('overlay-result'),
     resultTitle: $('result-title'), resultDesc: $('result-desc'),
     btnResultPrimary: $('btn-result-primary'),
@@ -1368,6 +1515,10 @@ function boot() {
   game.ui.btnStart.addEventListener('click', onStartWave);
   game.ui.btnExtract.addEventListener('click', onExtract);
   $('btn-extract-cancel').addEventListener('click', () => { game.state.selectedRemnantUid = null; });
+  $('btn-unit-close').addEventListener('click', () => { game.state.selectedUnitUid = null; });
+  $('btn-dismantle').addEventListener('click', () => { game.view.confirmDismantleUid = game.state.selectedUnitUid; });
+  $('btn-dismantle-cancel').addEventListener('click', () => { game.view.confirmDismantleUid = null; });   // 변화 없음
+  $('btn-dismantle-confirm').addEventListener('click', onDismantleConfirm);
   game.ui.btnResultPrimary.addEventListener('click', onResultPrimary);
   $('btn-result-title').addEventListener('click', goToTitle);
   window.addEventListener('keydown', onKeyDown);

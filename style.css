@@ -136,6 +136,21 @@ body {
 .extract-buttons button { flex: 1; padding: 9px 10px; font-size: 14px; }
 #btn-extract.poor { opacity: 0.45; }
 
+.unit-panel { border-color: var(--line); box-shadow: 0 0 18px rgba(0, 0, 0, 0.4); }
+.unit-panel .extract-eyebrow { color: var(--accent-2); }
+
+.btn-danger {
+  font: inherit;
+  font-weight: 700;
+  border-radius: 10px;
+  cursor: pointer;
+  background: var(--warn);
+  border: none;
+  color: #fff;
+}
+
+.btn-danger:hover { filter: brightness(1.15); }
+
 /* ---------- 하단 조작부 ---------- */
 #controls {
   display: flex;
