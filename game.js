@@ -17,7 +17,7 @@
 
 /* ==================================================================
  * [1] GAME_DATA
- *  - 좌표 단위는 전장 좌표(960×540 기준), 시간 단위는 초
+ *  - 좌표 단위는 전장 좌표(960×588 기준), 시간 단위는 초
  *  - spawn 값은 적 출현 지점 번호 (0 북, 1 동, 2 남, 3 서)
  *  - 데이터를 잘못 수정하면 게임 시작 전에 화면에 오류 목록이 표시됩니다.
  * ================================================================== */
@@ -31,19 +31,21 @@ const GAME_DATA = {
     dismantleRefundRate: 0.5, // 해체 시 반환 비율. 생성 때 실제 소비한 에너지 기준, 반올림 (SD-DISMANTLE)
     coreHp: 10,
     maxArmy: 15,           // 전체 군단 최대 수 (기본 + 추출)
-    maxBasic: 3,           // 기본 그림자 최대 수
+    maxBasic: 4,           // 기본 그림자 최대 수
     fixedStep: 1 / 60,     // 전투 계산 간격(초). 바꾸지 않는 것을 권장
   },
 
+  // 맵 이미지(1602×981)를 가로 960에 맞춘 크기. 거점 = 맵 중앙 문양 중심
   field: {
     width: 960,
-    height: 540,
-    core: { x: 480, y: 270, radius: 45 },
+    height: 588,
+    core: { x: 480, y: 295, radius: 45 },
     spawnPoints: [
-      { id: 'N', label: '북', x: 480, y: 24 },
-      { id: 'E', label: '동', x: 936, y: 270 },
-      { id: 'S', label: '남', x: 480, y: 516 },
-      { id: 'W', label: '서', x: 24,  y: 270 },
+      // revealTop: 표시 전용. 이 y보다 위쪽은 그리지 않아 적이 석상 턱 아래 벽에서 걸어 나오는 것처럼 보임
+      { id: 'N', label: '북', x: 480, y: 60, revealTop: 64 },   // 석상 턱 바로 아래 (거점까지 235)
+      { id: 'E', label: '동', x: 936, y: 295 },  // 거점까지 456
+      { id: 'S', label: '남', x: 480, y: 541 },  // 아래쪽 출입구 (거점까지 246)
+      { id: 'W', label: '서', x: 24,  y: 295 },  // 거점까지 456
     ],
     // 기본 그림자 배치 제한 (추출 그림자는 맵 범위만 검사)
     placement: {
@@ -865,8 +867,9 @@ function validateGameData(data) {
  * ================================================================== */
 const COLORS = {
   bg: '#0b0d17', grid: 'rgba(255,255,255,0.03)', arena: '#11152a', arenaLine: '#262d4b',
-  core: '#1d1233', coreLine: '#8b6cff', coreHp: '#3ddc97', coreHpLow: '#ff5c7a',
-  spawn: '#ff5c7a', noZone: 'rgba(255,92,122,0.09)', noZoneLine: 'rgba(255,92,122,0.35)',
+  mapShade: 'rgba(6,8,16,0.28)', textOutline: 'rgba(5,6,12,0.85)',
+  core: 'rgba(29,18,51,0.6)', coreLine: '#8b6cff', coreHp: '#3ddc97', coreHpLow: '#ff5c7a',
+  spawn: '#ff5c7a',
   ghostOk: '#3ddc97', ghostBad: '#ff5c7a', recall: '#ffcf5c',
   remnant: '#7b5cff', remnantRing: '#c9b8ff', selected: '#ffffff',
   extracted: '#241a46', extractedLine: '#a98bff',
@@ -876,6 +879,8 @@ const COLORS = {
   range: 'rgba(124,196,255,0.10)', rangeLine: 'rgba(124,196,255,0.35)',
   detect: 'rgba(185,166,255,0.45)', roam: 'rgba(185,166,255,0.06)', rangeEnemy: 'rgba(255,107,107,0.35)',
 };
+
+const MAP_IMAGE_SRC = 'assets/map.webp';   // 1602×981 맵 디자인 (중앙 문양 = 거점, 푸른 균열 4곳 = 적 출현 방향)
 
 function drawCircle(ctx, x, y, r) {
   ctx.beginPath();
@@ -899,74 +904,68 @@ function drawRoundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
+// 맵 이미지 위에서도 읽히도록 어두운 외곽선을 두른 글자
 function drawLabel(ctx, text, x, y, color, font) {
-  ctx.fillStyle = color;
   ctx.font = font || '11px sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = COLORS.textOutline;
+  ctx.strokeText(text, x, y);
+  ctx.lineWidth = 1;
+  ctx.fillStyle = color;
   ctx.fillText(text, x, y);
 }
 
 function render(ctx, state, view) {
   const F = GAME_DATA.field;
   const core = F.core;
-  const P = F.placement;
   const placing = !!state.selectedShadowId && isFieldActive(state);
 
-  // 배경 + 격자
-  ctx.fillStyle = COLORS.bg;
-  ctx.fillRect(0, 0, F.width, F.height);
-  ctx.strokeStyle = COLORS.grid;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let x = 40; x < F.width; x += 40) { ctx.moveTo(x, 0); ctx.lineTo(x, F.height); }
-  for (let y = 30; y < F.height; y += 40) { ctx.moveTo(0, y); ctx.lineTo(F.width, y); }
-  ctx.stroke();
+  if (view.mapImage) {
+    // 맵 디자인 이미지를 전장 크기에 맞춰 그림 (판정 좌표와는 별개)
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(view.mapImage, 0, 0, F.width, F.height);
+    ctx.fillStyle = COLORS.mapShade;   // 유닛이 잘 보이도록 살짝 어둡게
+    ctx.fillRect(0, 0, F.width, F.height);
+  } else {
+    // 이미지를 불러오지 못했을 때의 기본 배경 + 격자
+    ctx.fillStyle = COLORS.bg;
+    ctx.fillRect(0, 0, F.width, F.height);
+    ctx.strokeStyle = COLORS.grid;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = 40; x < F.width; x += 40) { ctx.moveTo(x, 0); ctx.lineTo(x, F.height); }
+    for (let y = 30; y < F.height; y += 40) { ctx.moveTo(0, y); ctx.lineTo(F.width, y); }
+    ctx.stroke();
 
-  // 원형 전장 디자인 (판정은 직사각형 전장 전체)
-  ctx.fillStyle = COLORS.arena;
-  drawCircle(ctx, core.x, core.y, 250); ctx.fill();
-  ctx.strokeStyle = COLORS.arenaLine;
-  ctx.stroke();
-  ctx.setLineDash([6, 8]);
-  drawCircle(ctx, core.x, core.y, 150); ctx.stroke();
-  ctx.setLineDash([]);
-
-  // 배치 불가 구역 (카드 선택 중에만)
-  if (placing) {
-    ctx.fillStyle = COLORS.noZone;
-    ctx.fillRect(0, 0, F.width, P.edgeClear);
-    ctx.fillRect(0, F.height - P.edgeClear, F.width, P.edgeClear);
-    ctx.fillRect(0, P.edgeClear, P.edgeClear, F.height - P.edgeClear * 2);
-    ctx.fillRect(F.width - P.edgeClear, P.edgeClear, P.edgeClear, F.height - P.edgeClear * 2);
-    ctx.strokeStyle = COLORS.noZoneLine;
-    const zones = [{ x: core.x, y: core.y, r: P.coreClear }]
-      .concat(F.spawnPoints.map((sp) => ({ x: sp.x, y: sp.y, r: P.spawnClear })))
-      .concat(state.basicUnits.filter((u) => u.alive).map((u) => ({ x: u.x, y: u.y, r: P.basicSpacing })));
-    for (const z of zones) {
-      drawCircle(ctx, z.x, z.y, z.r);
-      ctx.fill();
-      ctx.stroke();
-    }
+    // 원형 전장 디자인 (판정은 직사각형 전장 전체)
+    ctx.fillStyle = COLORS.arena;
+    drawCircle(ctx, core.x, core.y, 250); ctx.fill();
+    ctx.strokeStyle = COLORS.arenaLine;
+    ctx.stroke();
+    ctx.setLineDash([6, 8]);
+    drawCircle(ctx, core.x, core.y, 150); ctx.stroke();
+    ctx.setLineDash([]);
   }
 
-  // 적 출현 지점
-  F.spawnPoints.forEach((sp) => {
-    ctx.strokeStyle = COLORS.spawn;
-    ctx.setLineDash([4, 4]);
-    drawCircle(ctx, sp.x, sp.y, 14); ctx.stroke();
-    ctx.setLineDash([]);
-    const lx = sp.x + (sp.x < 100 ? 30 : sp.x > F.width - 100 ? -30 : 0);
-    const ly = sp.y + (sp.y < 100 ? 26 : sp.y > F.height - 100 ? -26 : 0);
-    drawLabel(ctx, sp.label, lx, ly, COLORS.spawn, 'bold 12px sans-serif');
-  });
+  // 배치 불가 구역(맵 가장자리·거점·출현 지점·기존 기본 그림자 주변)은 화면에 따로 칠하지 않음.
+  // 규칙(checkPlacement)은 그대로이며, 배치 미리보기 테두리가 초록/빨강으로 바뀌어 알려줌.
+  // 적 출현 지점도 별도 표시 없음 (맵의 푸른 균열이 방향을 알려줌)
 
   // 중앙 거점 + HP 링
   const hpRatio = state.coreHp / state.maxCoreHp;
-  ctx.fillStyle = COLORS.core;
+  ctx.save();
+  ctx.shadowColor = COLORS.coreLine;
+  ctx.shadowBlur = 18;
+  ctx.fillStyle = COLORS.core;   // 반투명: 맵 중앙 문양이 비쳐 보이도록
   drawCircle(ctx, core.x, core.y, core.radius); ctx.fill();
+  ctx.restore();
   ctx.strokeStyle = COLORS.coreLine;
   ctx.lineWidth = 2;
+  drawCircle(ctx, core.x, core.y, core.radius);
   ctx.stroke();
   ctx.lineWidth = 5;
   ctx.strokeStyle = hpRatio <= 0.3 ? COLORS.coreHpLow : COLORS.coreHp;
@@ -1077,6 +1076,14 @@ function render(ctx, state, view) {
   // 적
   for (const e of state.enemies) {
     const d = findEnemyData(e.typeId);
+    const sp = F.spawnPoints[e.spawn];
+    const clipTop = sp && sp.revealTop !== undefined ? sp.revealTop : null;
+    if (clipTop !== null) {   // 출현 연출: 지정한 선 위쪽은 가려서 벽 아래에서 나오는 것처럼
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, clipTop, F.width, F.height - clipTop);
+      ctx.clip();
+    }
     ctx.fillStyle = d.color;
     drawCircle(ctx, e.x, e.y, e.radius); ctx.fill();
     ctx.strokeStyle = e.moving ? 'rgba(0,0,0,0.4)' : '#ffffff';   // 멈춰서 싸우는 중이면 흰 테두리
@@ -1085,6 +1092,7 @@ function render(ctx, state, view) {
     ctx.lineWidth = 1;
     drawLabel(ctx, d.name, e.x, e.y + e.radius + 10, COLORS.text, '10px sans-serif');
     drawHpBar(ctx, e.x, e.y - e.radius - 9, 30, e.hp / e.maxHp, COLORS.hpEnemy);
+    if (clipTop !== null) ctx.restore();
   }
 
   // 공격 선
@@ -1135,7 +1143,7 @@ const game = {
   ctx: null,
   ui: {},
   // confirmDismantleUid: 해체 확인 단계에 들어간 그림자 (UI 전용 상태)
-  view: { mouse: null, hoverRemnantUid: null, hoverUnitUid: null, showRanges: false, time: 0, confirmDismantleUid: null },
+  view: { mouse: null, hoverRemnantUid: null, hoverUnitUid: null, showRanges: false, time: 0, confirmDismantleUid: null, mapImage: null },
   toastTimer: null,
   lastTime: null,
   accumulator: 0,
@@ -1506,6 +1514,12 @@ function boot() {
 
   game.state = createInitialState();
   buildShadowCards();
+
+  // 맵 디자인 이미지. 불러오기 전·실패 시에는 기본 배경으로 그림
+  const mapImage = new Image();
+  mapImage.onload = () => { game.view.mapImage = mapImage; };
+  mapImage.onerror = () => console.warn(`[맵 이미지 불러오기 실패] ${MAP_IMAGE_SRC}`);
+  mapImage.src = MAP_IMAGE_SRC;
 
   game.canvas.addEventListener('click', onCanvasClick);
   game.canvas.addEventListener('mousemove', onMouseMove);
