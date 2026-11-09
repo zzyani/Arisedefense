@@ -273,6 +273,72 @@ function moveToward(unit, tx, ty, maxStep, stopDist) {
   unit.y += ((ty - unit.y) / d) * step;
 }
 
+/* ---------- 거점 우회 이동 (추출 그림자) ----------
+ * 거점(반경 45) + 유닛 반경 + 여유 2px 원을 장애물로 보고,
+ * 목표까지 직선이 이 원을 지나면 원의 접선 방향으로 돌아서 이동한다. */
+const CORE_CLEARANCE = 2;
+
+function coreBlockRadius(unit) {
+  return GAME_DATA.field.core.radius + (unit.radius || 0) + CORE_CLEARANCE;
+}
+
+// -π ~ π 범위의 각도 차이
+function angleDiff(a, b) {
+  let d = a - b;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+
+// 선분 (ax, ay)→(bx, by)가 중심 (cx, cy), 반경 r인 원을 지나는가
+function segmentHitsCircle(ax, ay, bx, by, cx, cy, r) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((cx - ax) * dx + (cy - ay) * dy) / len2));
+  return dist(ax + dx * t, ay + dy * t, cx, cy) < r;
+}
+
+// 거점에 겹쳐 있으면 둘레 밖으로 밀어냄
+function pushOutOfCore(unit) {
+  const c = GAME_DATA.field.core;
+  const R = coreBlockRadius(unit);
+  const d = dist(unit.x, unit.y, c.x, c.y);
+  if (d >= R) return;
+  if (d === 0) { unit.y = c.y - R; return; }
+  unit.x = c.x + ((unit.x - c.x) / d) * R;
+  unit.y = c.y + ((unit.y - c.y) / d) * R;
+}
+
+// 우회 경유점: 목표가 있는 쪽으로 도는 접선 위의 점
+function coreDetourPoint(unit, tx, ty, R) {
+  const c = GAME_DATA.field.core;
+  const d = dist(unit.x, unit.y, c.x, c.y);
+  const base = Math.atan2(unit.y - c.y, unit.x - c.x);
+  const side = angleDiff(Math.atan2(ty - c.y, tx - c.x), base) >= 0 ? 1 : -1;
+  if (d <= R + 0.5) {
+    // 이미 둘레에 붙어 있으면 둘레를 따라 조금 앞 지점으로
+    const a = base + side * 0.35;
+    return { x: c.x + Math.cos(a) * (R + 1), y: c.y + Math.sin(a) * (R + 1) };
+  }
+  const a = base + side * Math.acos(R / d);   // 접점
+  return { x: c.x + Math.cos(a) * R, y: c.y + Math.sin(a) * R };
+}
+
+// 거점을 통과하지 않고 (tx, ty)로 이동
+function moveAroundCore(unit, tx, ty, maxStep, stopDist) {
+  if (dist(unit.x, unit.y, tx, ty) <= stopDist) return;
+  const c = GAME_DATA.field.core;
+  const R = coreBlockRadius(unit);
+  if (segmentHitsCircle(unit.x, unit.y, tx, ty, c.x, c.y, R - 0.5)) {
+    const wp = coreDetourPoint(unit, tx, ty, R + 1);
+    moveToward(unit, wp.x, wp.y, maxStep, 0);
+  } else {
+    moveToward(unit, tx, ty, maxStep, stopDist);
+  }
+  pushOutOfCore(unit);
+}
+
 /* ---------- 기본 그림자: 자유 배치 / 회수 ---------- */
 
 // 기본 그림자 배치 위치 검사. 문제가 없으면 null
@@ -474,6 +540,7 @@ function extractShadow(state, remnantUid) {
     spawnTimer: ex.spawnDelay,
     x: remnant.x,
     y: remnant.y,
+    radius: Math.round((findEnemyData(remnant.sourceEnemyId) || { radius: 14 }).radius * 0.9),   // 그리기·거점 충돌 반경
     originX: 0,
     originY: 0,
     hp: data.maxHp,
@@ -490,6 +557,7 @@ function extractShadow(state, remnantUid) {
     energyCostPaid: data.cost, // 실제 소비 에너지 → 해체 반환 기준
   };
   clampToField(unit);   // 추출 그림자는 배치 제한 없이 맵 범위만 검사
+  pushOutOfCore(unit);  // 거점 바로 옆에서 처치된 경우 거점과 겹치지 않게
   unit.originX = unit.x;
   unit.originY = unit.y;
   state.extractedUnits.push(unit);
@@ -692,9 +760,10 @@ function updateExtractedAI(state, dt) {
         continue;
       }
       s.aiState = AI.CHASE;
-      moveToward(s, target.x, target.y, s.moveSpeed * dt, s.attackRange * 0.9);
+      moveAroundCore(s, target.x, target.y, s.moveSpeed * dt, s.attackRange * 0.9);   // 거점은 돌아서 감
       clampToRoam(s);
       clampToField(s);
+      pushOutOfCore(s);
       continue;
     }
 
@@ -702,7 +771,7 @@ function updateExtractedAI(state, dt) {
     const fromOrigin = dist(s.x, s.y, s.originX, s.originY);
     if (s.aiState === AI.RETURN || fromOrigin > ex.returnThreshold) {
       s.aiState = AI.RETURN;
-      moveToward(s, s.originX, s.originY, s.moveSpeed * dt, 0);
+      moveAroundCore(s, s.originX, s.originY, s.moveSpeed * dt, 0);
       if (dist(s.x, s.y, s.originX, s.originY) < 0.5) {
         s.x = s.originX;
         s.y = s.originY;
@@ -1049,7 +1118,7 @@ function render(ctx, state, view) {
   // 추출 그림자
   for (const s of state.extractedUnits) {
     const src = findEnemyData(s.sourceEnemyId);
-    const r = Math.round((src ? src.radius : 14) * 0.9);
+    const r = s.radius;
     const spawnRatio = s.aiState === AI.SPAWN ? 1 - s.spawnTimer / GAME_DATA.extraction.spawnDelay : 1;
     ctx.globalAlpha = 0.35 + 0.65 * Math.max(0, Math.min(1, spawnRatio));
     ctx.save();
