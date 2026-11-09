@@ -41,11 +41,13 @@ const GAME_DATA = {
     height: 588,
     core: { x: 480, y: 295, radius: 45 },
     spawnPoints: [
-      // revealTop: 표시 전용. 이 y보다 위쪽은 그리지 않아 적이 석상 턱 아래 벽에서 걸어 나오는 것처럼 보임
-      { id: 'N', label: '북', x: 480, y: 60, revealTop: 64 },   // 석상 턱 바로 아래 (거점까지 235)
-      { id: 'E', label: '동', x: 936, y: 295 },  // 거점까지 456
-      { id: 'S', label: '남', x: 480, y: 541 },  // 아래쪽 출입구 (거점까지 246)
-      { id: 'W', label: '서', x: 24,  y: 295 },  // 거점까지 456
+      // 아래 두 값은 표시 전용 (게임 규칙과 무관)
+      //  revealTop: 이 y보다 위쪽은 그리지 않아 적이 석상 턱 아래 벽에서 걸어 나오는 것처럼 보임
+      //  crack: 맵 이미지에서 이 출현 지점의 푸른 균열이 있는 영역 → 빛나는 연출에 사용
+      { id: 'N', label: '북', x: 480, y: 60, revealTop: 64, crack: { x: 405, y: 58, w: 120, h: 92 } },   // 석상 턱 바로 아래 (거점까지 235)
+      { id: 'E', label: '동', x: 936, y: 295, crack: { x: 810, y: 260, w: 140, h: 72 } },  // 거점까지 456
+      { id: 'S', label: '남', x: 480, y: 541, crack: { x: 418, y: 405, w: 110, h: 150 } }, // 아래쪽 출입구 (거점까지 246)
+      { id: 'W', label: '서', x: 24,  y: 295, crack: { x: 10, y: 260, w: 140, h: 72 } },   // 거점까지 456
     ],
     // 기본 그림자 배치 제한 (추출 그림자는 맵 범위만 검사)
     placement: {
@@ -706,6 +708,7 @@ function updateSpawning(state, dt) {
   while (state.spawnTimer <= 0 && state.spawnIndex < wave.enemies.length) {
     const entry = wave.enemies[state.spawnIndex];
     state.enemies.push(createEnemy(state, entry.enemyId, entry.spawn));
+    state.events.push(`SPAWN_${entry.spawn}`);   // 화면 연출용 (균열 번쩍임)
     state.spawnIndex += 1;
     state.spawnTimer += wave.spawnInterval;
   }
@@ -951,6 +954,157 @@ const COLORS = {
 
 const MAP_IMAGE_SRC = 'assets/map.webp';   // 1602×981 맵 디자인 (중앙 문양 = 거점, 푸른 균열 4곳 = 적 출현 방향)
 
+// 맵 이미지 속 푸른 불꽃 위치(전장 좌표, 불꽃 중심). 표시 전용 — 게임 규칙과 무관
+const MAP_FLAMES = [
+  { x: 305, y: 27 }, { x: 653, y: 27 },   // 위쪽 벽감
+  { x: 63,  y: 73 }, { x: 896, y: 74 },   // 위쪽 모서리 기둥
+  { x: 71,  y: 525 }, { x: 888, y: 525 }, // 아래쪽 모서리 기둥
+];
+
+/* ---------- 출현 균열 빛 ----------
+ * 맵 이미지를 자기 자신과 여러 번 곱하면(multiply) 회색 돌바닥은 거의 검게 사라지고
+ * 밝은 하늘색 균열만 남는다. 픽셀을 직접 읽지 않으므로 파일로 열어도(file://) 동작한다.
+ * 이 '균열만 남은 이미지'를 출현 지점 영역에서만 빛처럼 더해서 그린다. */
+const CRACK_BLUR_SCALE = 5;   // 작게 줄였다 늘려서 번지는 빛을 만듦
+
+function buildCrackGlow(img) {
+  const F = GAME_DATA.field;
+  const sharp = document.createElement('canvas');
+  sharp.width = F.width;
+  sharp.height = F.height;
+  const c = sharp.getContext('2d');
+  c.drawImage(img, 0, 0, F.width, F.height);
+  c.globalCompositeOperation = 'multiply';
+  for (let i = 0; i < 3; i++) c.drawImage(img, 0, 0, F.width, F.height);   // 밝기^4 → 균열만 남음
+  // 출현 지점 균열 영역만 남기고 나머지는 지움
+  c.globalCompositeOperation = 'destination-in';
+  c.beginPath();
+  for (const sp of F.spawnPoints) if (sp.crack) c.rect(sp.crack.x, sp.crack.y, sp.crack.w, sp.crack.h);
+  c.fillStyle = '#fff';
+  c.fill();
+
+  const soft = document.createElement('canvas');
+  soft.width = Math.ceil(F.width / CRACK_BLUR_SCALE);
+  soft.height = Math.ceil(F.height / CRACK_BLUR_SCALE);
+  const s = soft.getContext('2d');
+  s.imageSmoothingEnabled = true;
+  s.drawImage(sharp, 0, 0, soft.width, soft.height);
+  return { sharp, soft };
+}
+
+// 평소에는 출현 지점마다 박자를 달리해 은은하게 맥동, 적이 나오면 번쩍였다가 사그라듦
+function drawCrackGlow(ctx, view) {
+  const glow = view.crackGlow;
+  if (!glow) return;
+  const k = CRACK_BLUR_SCALE;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.imageSmoothingEnabled = true;
+  GAME_DATA.field.spawnPoints.forEach((sp, i) => {
+    const r = sp.crack;
+    if (!r) return;
+    const base = 0.35 + 0.2 * Math.sin(view.time * 1.8 + i * 1.57);
+    const a = Math.min(1, base + view.crackFlash[i] * 0.9);
+    // 번지는 빛 (작은 이미지를 늘려 그림 → 흐릿하게 퍼짐)
+    ctx.globalAlpha = a;
+    ctx.drawImage(glow.soft, r.x / k, r.y / k, r.w / k, r.h / k, r.x, r.y, r.w, r.h);
+    ctx.drawImage(glow.soft, r.x / k, r.y / k, r.w / k, r.h / k, r.x, r.y, r.w, r.h);
+    // 균열 선 자체
+    ctx.globalAlpha = a * 0.8;
+    ctx.drawImage(glow.sharp, r.x, r.y, r.w, r.h, r.x, r.y, r.w, r.h);
+  });
+  ctx.restore();
+}
+
+// 맵 위쪽 석상의 두 눈(전장 좌표). 표시 전용
+const STATUE_EYES = [{ x: 455, y: 7 }, { x: 504, y: 7 }];
+// 눈빛 맥동(초): 서서히 밝아짐(rise) → 사그라듦(fall) → 잠시 원래 밝기로 쉼
+const EYE_PULSE = { period: 4.2, rise: 1.1, fall: 1.9 };
+
+function easeInOut(u) { return 0.5 - 0.5 * Math.cos(Math.PI * Math.max(0, Math.min(1, u))); }
+
+// 0(평소) ~ 1(가장 밝음)
+function eyePulse(t) {
+  const p = t % EYE_PULSE.period;
+  if (p < EYE_PULSE.rise) return easeInOut(p / EYE_PULSE.rise);
+  if (p < EYE_PULSE.rise + EYE_PULSE.fall) return 1 - easeInOut((p - EYE_PULSE.rise) / EYE_PULSE.fall);
+  return 0;
+}
+
+// 석상 눈이 빛났다가 사그라드는 연출
+function drawStatueEyes(ctx, time) {
+  const a = eyePulse(time);
+  if (a < 0.01) return;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const e of STATUE_EYES) {
+    // 가로로 긴 은은한 빛 번짐
+    ctx.save();
+    ctx.translate(e.x, e.y);
+    ctx.scale(1.8, 1);
+    const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, 14);
+    glow.addColorStop(0, `rgba(120,200,255,${(0.6 * a).toFixed(3)})`);
+    glow.addColorStop(0.5, `rgba(80,160,255,${(0.22 * a).toFixed(3)})`);
+    glow.addColorStop(1, 'rgba(80,160,255,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(-14, -14, 28, 28);
+    ctx.restore();
+    // 눈동자 자리의 밝은 심
+    ctx.fillStyle = `rgba(230,248,255,${(0.85 * a).toFixed(3)})`;
+    ctx.beginPath();
+    ctx.ellipse(e.x, e.y, 6, 1.8, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// 주기가 다른 사인파를 섞어 불규칙하게 흔들리는 값 (-1 ~ 1)
+function flicker(t, seed) {
+  return 0.55 * Math.sin(t * 7.3 + seed)
+       + 0.30 * Math.sin(t * 13.1 + seed * 2.1)
+       + 0.15 * Math.sin(t * 23.7 + seed * 3.7);
+}
+
+// 불꽃 혀 모양: 아래는 둥글고 위로 갈수록 가늘어지며 끝이 sway만큼 기울어짐
+function flameTonguePath(ctx, x, y, w, h, sway) {
+  ctx.beginPath();
+  ctx.moveTo(x, y + w);
+  ctx.bezierCurveTo(x - w * 1.4, y + w * 0.2, x - w * 0.7 + sway * 0.4, y - h * 0.5, x + sway, y - h);
+  ctx.bezierCurveTo(x + w * 0.7 + sway * 0.4, y - h * 0.5, x + w * 1.4, y + w * 0.2, x, y + w);
+  ctx.closePath();
+}
+
+// 맵의 불꽃 위에 빛 번짐 + 불꽃 혀를 겹쳐 그려 일렁이는 느낌을 줌 (실제 시간 기준이라 일시정지·준비 중에도 움직임)
+function drawMapFlames(ctx, time) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';   // 빛처럼 밝기를 더하는 혼합
+  MAP_FLAMES.forEach((f, i) => {
+    const seed = i * 1.7;
+    const k = flicker(time, seed);
+    const k2 = flicker(time * 1.3, seed + 5);
+
+    // 1) 빛 번짐: 반경·밝기가 흔들림
+    const r = 24 + k * 4;
+    const gy = f.y - 2;
+    const glow = ctx.createRadialGradient(f.x, gy, 0, f.x, gy, r);
+    glow.addColorStop(0, `rgba(80,170,255,${(0.32 + k * 0.08).toFixed(3)})`);
+    glow.addColorStop(0.45, `rgba(60,140,255,${(0.12 + k * 0.04).toFixed(3)})`);
+    glow.addColorStop(1, 'rgba(60,140,255,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(f.x - r, gy - r, r * 2, r * 2);
+
+    // 2) 불꽃 혀: 바깥(하늘색) → 안쪽(흰빛) 두 겹, 높이와 기울기가 따로 흔들림
+    const baseY = f.y + 6;
+    ctx.fillStyle = `rgba(70,160,255,${(0.45 + k2 * 0.1).toFixed(3)})`;
+    flameTonguePath(ctx, f.x, baseY, 4.5, 14 + k * 2.5, k2 * 2.2);
+    ctx.fill();
+    ctx.fillStyle = `rgba(210,240,255,${(0.55 + k * 0.15).toFixed(3)})`;
+    flameTonguePath(ctx, f.x, baseY + 1, 2.4, 7.5 + k2 * 1.5, k * 1.2);
+    ctx.fill();
+  });
+  ctx.restore();
+}
+
 function drawCircle(ctx, x, y, r) {
   ctx.beginPath();
   ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -999,6 +1153,9 @@ function render(ctx, state, view) {
     ctx.drawImage(view.mapImage, 0, 0, F.width, F.height);
     ctx.fillStyle = COLORS.mapShade;   // 유닛이 잘 보이도록 살짝 어둡게
     ctx.fillRect(0, 0, F.width, F.height);
+    drawMapFlames(ctx, view.time);     // 불꽃 일렁임 (유닛보다 아래에 그림)
+    drawStatueEyes(ctx, view.time);    // 석상 눈빛 맥동
+    drawCrackGlow(ctx, view);          // 출현 균열 빛 (적이 나올 때 번쩍)
   } else {
     // 이미지를 불러오지 못했을 때의 기본 배경 + 격자
     ctx.fillStyle = COLORS.bg;
@@ -1212,7 +1369,12 @@ const game = {
   ctx: null,
   ui: {},
   // confirmDismantleUid: 해체 확인 단계에 들어간 그림자 (UI 전용 상태)
-  view: { mouse: null, hoverRemnantUid: null, hoverUnitUid: null, showRanges: false, time: 0, confirmDismantleUid: null, mapImage: null },
+  view: {
+    mouse: null, hoverRemnantUid: null, hoverUnitUid: null, showRanges: false, time: 0, confirmDismantleUid: null,
+    mapImage: null,
+    crackGlow: null,                // 균열만 뽑아낸 빛 이미지 (맵 불러온 뒤 생성)
+    crackFlash: [0, 0, 0, 0],       // 출현 지점별 번쩍임 세기 (적이 나올 때 1 → 서서히 0)
+  },
   toastTimer: null,
   lastTime: null,
   accumulator: 0,
@@ -1426,6 +1588,7 @@ function consumeEvents(st) {
   for (const ev of st.events) {
     if (ev === 'REMNANT_EXPIRED') showToast(REASON_TEXT.EXTRACT_GONE, 'warn');
     if (ev === 'UNIT_LOST') showToast(REASON_TEXT.UNIT_LOST, 'warn');
+    if (ev.startsWith('SPAWN_')) game.view.crackFlash[Number(ev.slice(6))] = 1;   // 해당 균열 번쩍
   }
   st.events.length = 0;
 }
@@ -1539,6 +1702,8 @@ function frame(now) {
   game.lastTime = now;
   game.view.time = now / 1000;
   if (delta > 0.25) delta = 0.25;   // 탭 전환 후 복귀 시 한꺼번에 몰아서 계산하지 않도록
+  const flash = game.view.crackFlash;   // 균열 번쩍임은 약 1초에 걸쳐 사그라듦
+  for (let i = 0; i < flash.length; i++) flash[i] = Math.max(0, flash[i] - delta * 1.1);
 
   const step = GAME_DATA.config.fixedStep;
   game.accumulator += delta;
@@ -1586,7 +1751,10 @@ function boot() {
 
   // 맵 디자인 이미지. 불러오기 전·실패 시에는 기본 배경으로 그림
   const mapImage = new Image();
-  mapImage.onload = () => { game.view.mapImage = mapImage; };
+  mapImage.onload = () => {
+    game.view.mapImage = mapImage;
+    game.view.crackGlow = buildCrackGlow(mapImage);
+  };
   mapImage.onerror = () => console.warn(`[맵 이미지 불러오기 실패] ${MAP_IMAGE_SRC}`);
   mapImage.src = MAP_IMAGE_SRC;
 
