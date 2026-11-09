@@ -13,15 +13,29 @@
     <header id="hud">
       <div class="hud-item">WAVE <b id="hud-wave">1 / 5</b></div>
       <div class="hud-item">그림자 에너지 <b id="hud-energy">100 / 150</b></div>
-      <div class="hud-item">기지 HP <b id="hud-base">10 / 10</b></div>
+      <div class="hud-item">거점 HP <b id="hud-core">10 / 10</b></div>
+      <div class="hud-item">군단 <b id="hud-army">0 / 15</b> <small id="hud-army-basic">기본 0/3</small></div>
       <div class="hud-item hud-status" id="hud-status">대기</div>
     </header>
     <p id="hint"></p>
 
     <!-- 전장 -->
     <div id="field-wrap">
-      <canvas id="field" width="960" height="450"></canvas>
+      <canvas id="field" width="960" height="540"></canvas>
       <div id="toast" class="toast"></div>
+
+      <!-- 그림자 추출 패널: 잔영을 클릭하면 표시 -->
+      <div id="extract-panel" class="extract-panel hidden">
+        <p class="extract-eyebrow">그림자 추출</p>
+        <h3 id="extract-name"></h3>
+        <p id="extract-stats" class="extract-line"></p>
+        <p id="extract-cost" class="extract-cost"></p>
+        <p id="extract-time" class="extract-line"></p>
+        <div class="extract-buttons">
+          <button id="btn-extract-cancel" type="button" class="btn-secondary">취소</button>
+          <button id="btn-extract" type="button" class="btn-primary">일어나라!</button>
+        </div>
+      </div>
     </div>
 
     <!-- 하단 조작부 -->
@@ -29,14 +43,14 @@
       <div id="shadow-cards"></div>
       <button id="btn-start-wave" type="button" class="btn-primary hidden">WAVE 1 시작</button>
     </footer>
-    <p class="keys">1·2·3 그림자 선택 · 좌클릭 배치 · 그림자 우클릭 회수(준비 단계) · 빈 곳 우클릭 선택 해제 · D 사거리 표시</p>
+    <p class="keys">1·2·3 기본 그림자 선택 · 좌클릭 배치 · 잔영 클릭 → 추출 · 기본 그림자 우클릭 회수(준비 단계) · Esc/우클릭 선택 해제 · D 범위 표시</p>
 
     <!-- 타이틀 -->
     <div id="overlay-title" class="overlay">
       <div class="panel">
         <p class="eyebrow">나 혼자만 레벨업 IP 기반 비공식 팬 제작 포트폴리오</p>
         <h1>Arise:그림자군단 디펜스</h1>
-        <p class="desc">그림자 에너지로 군단을 배치해 3개 라인으로 밀려오는<br>5개의 웨이브에서 기지를 지켜내세요.</p>
+        <p class="desc">사방에서 몰려오는 5개의 웨이브로부터 중앙 거점을 지켜내세요.<br>적이 쓰러진 자리의 잔영에서 그림자를 추출해 군단을 키우세요.</p>
         <div class="overlay-buttons">
           <button id="btn-play" type="button" class="btn-primary">게임 시작</button>
         </div>

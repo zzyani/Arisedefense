@@ -65,7 +65,9 @@ body {
   font-size: 16px;
 }
 
-#hud-base.danger { color: var(--warn); }
+#hud-core.danger { color: var(--warn); }
+
+.hud-item small { font-size: 12px; color: var(--sub); margin-left: 4px; }
 
 .hud-status {
   margin-left: auto;
@@ -112,6 +114,27 @@ body {
 .toast.show { display: block; }
 .toast.ok { border-color: var(--ok); color: var(--ok); }
 .toast.warn { border-color: var(--warn); color: var(--warn); }
+
+/* ---------- 그림자 추출 패널 ---------- */
+.extract-panel {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 250px;
+  padding: 14px 16px;
+  background: rgba(16, 19, 31, 0.95);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  box-shadow: 0 0 22px rgba(139, 108, 255, 0.35);
+}
+
+.extract-eyebrow { margin: 0; font-size: 11px; color: var(--accent); letter-spacing: 1px; }
+.extract-panel h3 { margin: 4px 0 8px; font-size: 16px; }
+.extract-line { margin: 2px 0; font-size: 12px; color: var(--sub); }
+.extract-cost { margin: 6px 0 2px; font-size: 13px; font-weight: 700; color: var(--accent-2); }
+.extract-buttons { display: flex; gap: 8px; margin-top: 12px; }
+.extract-buttons button { flex: 1; padding: 9px 10px; font-size: 14px; }
+#btn-extract.poor { opacity: 0.45; }
 
 /* ---------- 하단 조작부 ---------- */
 #controls {

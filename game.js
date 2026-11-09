@@ -1,22 +1,24 @@
 'use strict';
 
 /* ==================================================================
- * ARISE: 그림자 군단 디펜스 — game.js (DAY 1 전투 프로토타입)
+ * ARISE: 그림자 군단 디펜스 — game.js (v2.0 중앙 거점 · 자유 배치 · 그림자 추출)
  *
  *  [1] GAME_DATA   밸런스·콘텐츠 데이터 (수치 조정은 여기만 수정)
  *  [2] 상수 / 상태  게임 상태(GameState)와 상태 전이 규칙
- *  [3] 규칙 함수    소환, 피해, 에너지 등 (화면 코드와 분리)
+ *  [3] 규칙 함수    배치, 회수, 추출, 대상 탐색 등 (화면 코드와 분리)
  *  [4] 전투 틱      1/60초마다 실행되는 전투 계산
  *  [5] 렌더링       Canvas 그리기
- *  [6] UI / 입력    HUD, 카드, 버튼, 마우스·키보드
+ *  [6] UI / 입력    HUD, 카드, 추출 패널, 마우스·키보드
  *  [7] 게임 루프    requestAnimationFrame 1개만 사용
+ *
+ *  핵심 루프: 자유 배치 → 적 처치 → 잔영 생성 → 수동 추출 → 자동 추적
  * ================================================================== */
 
 
 /* ==================================================================
  * [1] GAME_DATA
- *  - lane 값은 0, 1, 2 (화면에는 L1, L2, L3로 표시)
- *  - 시간 단위는 초, 거리 단위는 전장 좌표(960×450 기준)
+ *  - 좌표 단위는 전장 좌표(960×540 기준), 시간 단위는 초
+ *  - spawn 값은 적 출현 지점 번호 (0 북, 1 동, 2 남, 3 서)
  *  - 데이터를 잘못 수정하면 게임 시작 전에 화면에 오류 목록이 표시됩니다.
  * ================================================================== */
 const GAME_DATA = {
@@ -24,23 +26,35 @@ const GAME_DATA = {
     startEnergy: 100,
     maxEnergy: 150,
     killReward: 10,
-    waveStartBonus: 20,   // 2웨이브부터 [웨이브 시작]을 누를 때 지급
-    recallRefundRate: 1.0,// 회수 시 환불 비율 (1.0 = 전액). 이번 준비 단계에서 배치한 그림자만 회수 가능
-    baseHp: 10,
-    fixedStep: 1 / 60,    // 전투 계산 간격(초). 바꾸지 않는 것을 권장
+    waveStartBonus: 20,    // 2웨이브부터 [웨이브 시작]을 누를 때 지급
+    recallRefundRate: 1.0, // 회수 시 환불 비율 (1.0 = 전액). 이번 준비 단계에서 배치한 기본 그림자만 회수 가능
+    coreHp: 10,
+    maxArmy: 15,           // 전체 군단 최대 수 (기본 + 추출)
+    maxBasic: 3,           // 기본 그림자 최대 수
+    fixedStep: 1 / 60,     // 전투 계산 간격(초). 바꾸지 않는 것을 권장
   },
 
   field: {
     width: 960,
-    height: 450,
-    laneY: [75, 225, 375],
-    baseX: 40,                 // 적이 이 X 이하로 오면 기지 피해
-    spawnX: 940,               // 적 생성 X
-    permanentSlotX: [190, 350],// 영구 그림자 슬롯 X (라인당 2개)
-    temporarySlotX: 270,       // 추출 그림자 슬롯 X (DAY 3에서 사용)
-    slotSize: 56,
+    height: 540,
+    core: { x: 480, y: 270, radius: 45 },
+    spawnPoints: [
+      { id: 'N', label: '북', x: 480, y: 24 },
+      { id: 'E', label: '동', x: 936, y: 270 },
+      { id: 'S', label: '남', x: 480, y: 516 },
+      { id: 'W', label: '서', x: 24,  y: 270 },
+    ],
+    // 기본 그림자 배치 제한 (추출 그림자는 맵 범위만 검사)
+    placement: {
+      coreClear: 70,     // 거점 중심 70px 이내 불가
+      spawnClear: 50,    // 적 출현 지점 50px 이내 불가
+      edgeClear: 20,     // 맵 경계 20px 이내 불가
+      basicSpacing: 35,  // 기존 기본 그림자 35px 이내 불가
+    },
+    unitMargin: 12,      // 움직이는 유닛이 맵 경계 안쪽에 머무는 여백
   },
 
+  // 기본 소환 그림자: 원하는 위치에 배치하는 고정형 방어 병력
   shadows: [
     { id: 'SH_001', name: '아이언',   role: 'tank',   cost: 30, maxHp: 300, attack: 20, attackInterval: 1.5, attackRange: 100, targetType: 'single',       color: '#4f86ff' },
     { id: 'SH_002', name: '이그리트', role: 'damage', cost: 50, maxHp: 150, attack: 65, attackInterval: 1.0, attackRange: 120, targetType: 'single',       color: '#a66bff' },
@@ -48,38 +62,58 @@ const GAME_DATA = {
   ],
 
   enemies: [
-    { id: 'EN_001', name: '일반형',   maxHp: 100, attack: 15, moveSpeed: 35, attackInterval: 2.0, attackRange: 45, baseDamage: 1, radius: 16, color: '#d99a3e' },
-    { id: 'EN_002', name: '돌격형',   maxHp: 70,  attack: 12, moveSpeed: 65, attackInterval: 1.5, attackRange: 45, baseDamage: 1, radius: 14, color: '#ff5d73' },
-    { id: 'EN_003', name: '중장갑형', maxHp: 260, attack: 30, moveSpeed: 20, attackInterval: 2.5, attackRange: 45, baseDamage: 2, radius: 20, color: '#b07a5a' },
+    { id: 'EN_001', name: '일반형',   maxHp: 100, attack: 15, moveSpeed: 35, attackInterval: 2.0, attackRange: 45, baseDamage: 1, radius: 14, color: '#d99a3e' },
+    { id: 'EN_002', name: '돌격형',   maxHp: 70,  attack: 12, moveSpeed: 65, attackInterval: 1.5, attackRange: 45, baseDamage: 1, radius: 12, color: '#ff5d73' },
+    { id: 'EN_003', name: '중장갑형', maxHp: 260, attack: 30, moveSpeed: 20, attackInterval: 2.5, attackRange: 45, baseDamage: 2, radius: 18, color: '#b07a5a' },
   ],
+
+  // 그림자 추출: 적 사망 위치에 잔영 생성 → 플레이어가 선택·에너지 지불 → 자동 추적형 그림자
+  extraction: {
+    remnantChance: 1.0,     // 잔영 생성 확률 (1.0 = 100%)
+    remnantDuration: 12,    // 잔영 지속 시간(초). 전투 중에만 줄어듦
+    detectionRadius: 180,   // 그림자 기준 적 탐색 반경
+    maxRoamRadius: 220,     // 생성 위치(origin) 기준 최대 이동 반경
+    returnThreshold: 20,    // 추격 대상이 없고 원점에서 이만큼 떨어지면 복귀
+    spawnDelay: 0.5,        // 추출 직후 행동 시작까지(초)
+    units: [
+      { sourceEnemyId: 'EN_001', cost: 10, maxHp: 80,  attack: 23, moveSpeed: 55, attackRange: 35, attackInterval: 1.5 },
+      { sourceEnemyId: 'EN_002', cost: 15, maxHp: 56,  attack: 18, moveSpeed: 90, attackRange: 35, attackInterval: 1.2 },
+      { sourceEnemyId: 'EN_003', cost: 25, maxHp: 208, attack: 45, moveSpeed: 35, attackRange: 35, attackInterval: 2.0 },
+    ],
+  },
 
   // 적은 배열 순서대로 spawnInterval 간격으로 생성됩니다 (첫 적은 웨이브 시작 즉시).
+  // 북·남 출현 지점은 거점과 가까워(약 185px) 동·서(약 395px)보다 빨리 도착합니다.
   waves: [
-    { waveId: 1, spawnInterval: 2.0, enemies: [
-      { enemyId: 'EN_001', lane: 0 }, { enemyId: 'EN_001', lane: 1 }, { enemyId: 'EN_001', lane: 2 }, { enemyId: 'EN_001', lane: 1 },
+    { waveId: 1, spawnInterval: 2.5, enemies: [
+      { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_001', spawn: 3 },
+      { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_001', spawn: 2 },
     ] },
-    { waveId: 2, spawnInterval: 2.0, enemies: [
-      { enemyId: 'EN_001', lane: 0 }, { enemyId: 'EN_001', lane: 2 }, { enemyId: 'EN_002', lane: 1 }, { enemyId: 'EN_001', lane: 1 },
-      { enemyId: 'EN_001', lane: 0 }, { enemyId: 'EN_002', lane: 2 }, { enemyId: 'EN_001', lane: 1 },
+    { waveId: 2, spawnInterval: 2.2, enemies: [
+      { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
+      { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 1 },
+      { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_002', spawn: 2 },
     ] },
     { waveId: 3, spawnInterval: 2.0, enemies: [
-      { enemyId: 'EN_001', lane: 1 }, { enemyId: 'EN_002', lane: 0 }, { enemyId: 'EN_001', lane: 2 }, { enemyId: 'EN_002', lane: 2 },
-      { enemyId: 'EN_003', lane: 1 }, { enemyId: 'EN_001', lane: 0 }, { enemyId: 'EN_002', lane: 1 }, { enemyId: 'EN_001', lane: 2 },
+      { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 3 }, { enemyId: 'EN_001', spawn: 0 },
+      { enemyId: 'EN_003', spawn: 3 }, { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 1 },
+      { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_002', spawn: 0 }, { enemyId: 'EN_001', spawn: 1 },
+      { enemyId: 'EN_001', spawn: 2 },
     ] },
-    { waveId: 4, spawnInterval: 2.0, enemies: [
-      { enemyId: 'EN_001', lane: 0 }, { enemyId: 'EN_001', lane: 1 }, { enemyId: 'EN_002', lane: 2 }, { enemyId: 'EN_003', lane: 0 },
-      { enemyId: 'EN_001', lane: 2 }, { enemyId: 'EN_002', lane: 1 }, { enemyId: 'EN_001', lane: 1 }, { enemyId: 'EN_002', lane: 0 },
-      { enemyId: 'EN_003', lane: 2 }, { enemyId: 'EN_002', lane: 2 }, { enemyId: 'EN_001', lane: 0 },
+    { waveId: 4, spawnInterval: 1.8, enemies: [
+      { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
+      { enemyId: 'EN_003', spawn: 1 }, { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_001', spawn: 3 },
+      { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_003', spawn: 3 }, { enemyId: 'EN_002', spawn: 1 },
+      { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 },
     ] },
-    { waveId: 5, spawnInterval: 2.0, enemies: [
-      { enemyId: 'EN_001', lane: 1 }, { enemyId: 'EN_001', lane: 0 }, { enemyId: 'EN_002', lane: 2 }, { enemyId: 'EN_003', lane: 1 },
-      { enemyId: 'EN_001', lane: 2 }, { enemyId: 'EN_002', lane: 0 }, { enemyId: 'EN_001', lane: 1 }, { enemyId: 'EN_003', lane: 0 },
-      { enemyId: 'EN_002', lane: 1 }, { enemyId: 'EN_001', lane: 2 }, { enemyId: 'EN_003', lane: 2 }, { enemyId: 'EN_002', lane: 2 },
-      { enemyId: 'EN_001', lane: 0 },
+    { waveId: 5, spawnInterval: 1.6, enemies: [
+      { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
+      { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_003', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 },
+      { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_003', spawn: 1 }, { enemyId: 'EN_002', spawn: 3 },
+      { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 1 }, { enemyId: 'EN_003', spawn: 0 },
+      { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_001', spawn: 1 },
     ] },
   ],
-
-  // extraction: { ... }  → DAY 3 그림자 추출 단계에서 추가
 };
 
 
@@ -90,7 +124,7 @@ const STATUS = Object.freeze({
   READY: 'READY',             // 타이틀 화면
   PREPARATION: 'PREPARATION', // 병력 배치 (전투 정지)
   PLAYING: 'PLAYING',         // 전투 진행
-  PAUSED: 'PAUSED',           // 일시정지 (DAY 2)
+  PAUSED: 'PAUSED',           // 일시정지 (다음 작업)
   WAVE_CLEAR: 'WAVE_CLEAR',   // 웨이브 종료 처리
   VICTORY: 'VICTORY',
   DEFEAT: 'DEFEAT',
@@ -107,18 +141,30 @@ const TRANSITIONS = Object.freeze({
   DEFEAT:      ['READY'],
 });
 
-// 실패 사유 → 화면 메시지 (기획서 11-3)
+// 추출 그림자 AI 상태 (기획서 3-1). RETURN은 원점 복귀 이동 구간
+const AI = Object.freeze({
+  SPAWN: 'SPAWN', IDLE: 'IDLE', CHASE: 'CHASE', ATTACK: 'ATTACK', RETURN: 'RETURN', DEAD: 'DEAD',
+});
+
+// 실패 사유 → 화면 메시지
 const REASON_TEXT = Object.freeze({
-  INVALID_STATUS:    '지금은 소환할 수 없습니다.',
+  INVALID_STATUS:    '지금은 할 수 없습니다.',
   NO_SELECTION:      '소환할 그림자를 먼저 선택하세요.',
   INVALID_SHADOW:    '알 수 없는 그림자입니다.',
-  INVALID_SLOT:      '배치할 수 없는 위치입니다.',
-  SLOT_OCCUPIED:     '이미 그림자가 배치된 슬롯입니다.',
+  BASIC_FULL:        `기본 그림자는 최대 ${GAME_DATA.config.maxBasic}기까지 배치할 수 있습니다.`,
+  ARMY_FULL:         `군단이 가득 찼습니다 (최대 ${GAME_DATA.config.maxArmy}기).`,
   NOT_ENOUGH_ENERGY: '그림자 에너지가 부족합니다.',
+  // 배치 제한
+  PLACE_EDGE:        '전장 가장자리에는 배치할 수 없습니다.',
+  PLACE_CORE:        '거점과 너무 가깝습니다.',
+  PLACE_SPAWN:       '적 출현 지점과 너무 가깝습니다.',
+  PLACE_OVERLAP:     '다른 기본 그림자와 너무 가깝습니다.',
   // 회수
   RECALL_NOT_PREP:   '전투 중에는 회수할 수 없습니다.',
   RECALL_LOCKED:     '이전 웨이브에서 싸운 그림자는 회수할 수 없습니다.',
   RECALL_EMPTY:      '회수할 그림자가 없습니다.',
+  // 추출
+  EXTRACT_GONE:      '잔영이 사라졌습니다.',
 });
 
 const ROLE_TEXT = Object.freeze({ tank: '탱커', damage: '딜러', area: '광역' });
@@ -131,19 +177,25 @@ function createInitialState() {
     wave: 1,
     energy: c.startEnergy,
     maxEnergy: c.maxEnergy,
-    baseHp: c.baseHp,
-    maxBaseHp: c.baseHp,
-    selectedShadowId: null,
-    permanentUnits: [],
-    temporaryUnits: [],   // DAY 3
+    coreHp: c.coreHp,
+    maxCoreHp: c.coreHp,
+    selectedShadowId: null,   // 배치할 기본 그림자 카드
+    selectedRemnantUid: null, // 추출 패널에 띄운 잔영
+    basicUnits: [],           // 기본 소환 그림자 (고정)
+    extractedUnits: [],       // 추출 그림자 (자동 추적)
     enemies: [],
-    remnants: [],         // DAY 3
-    effects: [],          // 공격 선 표시 (연출용, 게임 규칙에 영향 없음)
+    remnants: [],
+    effects: [],              // 공격 선 표시 (연출용, 게임 규칙에 영향 없음)
+    events: [],               // 규칙 → UI 알림 (예: 선택한 잔영 만료). UI가 매 프레임 비움
     spawnIndex: 0,
     spawnTimer: 0,
-    nextUid: 1,           // 전장 객체 고유 ID (종류 ID와 별개)
+    nextUid: 1,               // 전장 객체 고유 ID (종류 ID와 별개)
     elapsed: 0,
-    stats: { kills: 0, extractionAttempts: 0, extractionSuccesses: 0, energySpent: 0, baseDamageTaken: 0 },
+    stats: {
+      kills: 0, waveKills: 0,
+      extractionAttempts: 0, extractionSuccesses: 0,
+      energySpent: 0, coreDamageTaken: 0,
+    },
   };
 }
 
@@ -162,9 +214,13 @@ function setStatus(state, next) {
 /* ==================================================================
  * [3] 규칙 함수 (DOM을 사용하지 않음 → 따로 테스트 가능)
  * ================================================================== */
-function findShadowData(id) { return GAME_DATA.shadows.find((s) => s.id === id) || null; }
-function findEnemyData(id)  { return GAME_DATA.enemies.find((e) => e.id === id) || null; }
+function findShadowData(id)     { return GAME_DATA.shadows.find((s) => s.id === id) || null; }
+function findEnemyData(id)      { return GAME_DATA.enemies.find((e) => e.id === id) || null; }
+function findExtractionData(id) { return GAME_DATA.extraction.units.find((u) => u.sourceEnemyId === id) || null; }
 function getWaveData(waveNumber) { return GAME_DATA.waves[waveNumber - 1] || null; }
+
+function dist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
+function isFieldActive(state) { return state.status === STATUS.PREPARATION || state.status === STATUS.PLAYING; }
 
 function addEnergy(state, amount) {
   state.energy = Math.min(state.maxEnergy, state.energy + amount);
@@ -180,30 +236,62 @@ function applyDamage(target, amount) {
   target.hp = Math.max(0, target.hp - amount);
   if (target.hp === 0) {
     target.alive = false;
+    if (target.aiState) target.aiState = AI.DEAD;
     return true;
   }
   return false;
 }
 
-function getSlotOccupant(state, lane, slotIndex) {
-  return state.permanentUnits.find((u) => u.alive && u.lane === lane && u.slotIndex === slotIndex) || null;
+function countBasic(state)     { return state.basicUnits.filter((u) => u.alive).length; }
+function countExtracted(state) { return state.extractedUnits.filter((u) => u.alive).length; }
+function countArmy(state)      { return countBasic(state) + countExtracted(state); }
+function getAllShadows(state)  { return state.basicUnits.concat(state.extractedUnits); }
+
+// 움직이는 유닛을 맵 안쪽으로 고정
+function clampToField(unit) {
+  const F = GAME_DATA.field;
+  const m = F.unitMargin;
+  unit.x = Math.max(m, Math.min(F.width - m, unit.x));
+  unit.y = Math.max(m, Math.min(F.height - m, unit.y));
 }
 
-function canSummon(state, shadowId, lane, slotIndex) {
-  if (state.status !== STATUS.PREPARATION && state.status !== STATUS.PLAYING) return { ok: false, reason: 'INVALID_STATUS' };
+// (x, y)로 이동. stopDist 안쪽까지는 들어가지 않음
+function moveToward(unit, tx, ty, maxStep, stopDist) {
+  const d = dist(unit.x, unit.y, tx, ty);
+  if (d <= stopDist || d === 0) return;
+  const step = Math.min(maxStep, d - stopDist);
+  unit.x += ((tx - unit.x) / d) * step;
+  unit.y += ((ty - unit.y) / d) * step;
+}
+
+/* ---------- 기본 그림자: 자유 배치 / 회수 ---------- */
+
+// 기본 그림자 배치 위치 검사. 문제가 없으면 null
+function checkPlacement(state, x, y) {
+  const F = GAME_DATA.field;
+  const P = F.placement;
+  if (x < P.edgeClear || x > F.width - P.edgeClear || y < P.edgeClear || y > F.height - P.edgeClear) return 'PLACE_EDGE';
+  if (dist(x, y, F.core.x, F.core.y) <= P.coreClear) return 'PLACE_CORE';
+  if (F.spawnPoints.some((sp) => dist(x, y, sp.x, sp.y) <= P.spawnClear)) return 'PLACE_SPAWN';
+  if (state.basicUnits.some((u) => u.alive && dist(x, y, u.x, u.y) <= P.basicSpacing)) return 'PLACE_OVERLAP';
+  return null;
+}
+
+function canSummon(state, shadowId, x, y) {
+  if (!isFieldActive(state)) return { ok: false, reason: 'INVALID_STATUS' };
   if (!shadowId) return { ok: false, reason: 'NO_SELECTION' };
   const data = findShadowData(shadowId);
   if (!data) return { ok: false, reason: 'INVALID_SHADOW' };
-  const F = GAME_DATA.field;
-  if (!Number.isInteger(lane) || lane < 0 || lane >= F.laneY.length) return { ok: false, reason: 'INVALID_SLOT' };
-  if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex >= F.permanentSlotX.length) return { ok: false, reason: 'INVALID_SLOT' };
-  if (getSlotOccupant(state, lane, slotIndex)) return { ok: false, reason: 'SLOT_OCCUPIED' };
+  if (countBasic(state) >= GAME_DATA.config.maxBasic) return { ok: false, reason: 'BASIC_FULL' };
+  if (countArmy(state) >= GAME_DATA.config.maxArmy) return { ok: false, reason: 'ARMY_FULL' };
+  const placeError = checkPlacement(state, x, y);
+  if (placeError) return { ok: false, reason: placeError };
   if (state.energy < data.cost) return { ok: false, reason: 'NOT_ENOUGH_ENERGY' };
   return { ok: true, data };
 }
 
-function summonShadow(state, shadowId, lane, slotIndex) {
-  const check = canSummon(state, shadowId, lane, slotIndex);
+function summonShadow(state, shadowId, x, y) {
+  const check = canSummon(state, shadowId, x, y);
   if (!check.ok) return check;
   const d = check.data;
   state.energy -= d.cost;
@@ -211,10 +299,8 @@ function summonShadow(state, shadowId, lane, slotIndex) {
   const unit = {
     uid: state.nextUid++,
     typeId: d.id,
-    kind: 'permanent',
-    lane,
-    slotIndex,
-    x: GAME_DATA.field.permanentSlotX[slotIndex],
+    kind: 'basic',
+    x, y,
     hp: d.maxHp,
     maxHp: d.maxHp,
     attack: d.attack,
@@ -227,38 +313,139 @@ function summonShadow(state, shadowId, lane, slotIndex) {
     // 준비 단계에서 배치한 그림자만 회수 가능. 웨이브가 시작되면 false로 잠김
     recallable: state.status === STATUS.PREPARATION,
   };
-  state.permanentUnits.push(unit);
+  state.basicUnits.push(unit);
   return { ok: true, unit };
 }
 
-// 회수 규칙 (A안): 준비 단계 + 이번 준비 단계에서 배치한 그림자만, 비용 × recallRefundRate 환불
-function canRecall(state, lane, slotIndex) {
-  const unit = getSlotOccupant(state, lane, slotIndex);
-  if (!unit) return { ok: false, reason: 'RECALL_EMPTY' };
+// (x, y)에 있는 기본 그림자 (그림자 사각형 안)
+function getBasicAt(state, x, y) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const u of state.basicUnits) {
+    if (!u.alive || Math.abs(u.x - x) > 17 || Math.abs(u.y - y) > 17) continue;
+    const d = dist(x, y, u.x, u.y);
+    if (d < bestDist) { best = u; bestDist = d; }
+  }
+  return best;
+}
+
+// 회수 규칙: 준비 단계 + 이번 준비 단계에서 배치한 기본 그림자만, 비용 × recallRefundRate 환불
+function canRecall(state, unit) {
+  if (!unit || !unit.alive) return { ok: false, reason: 'RECALL_EMPTY' };
   if (state.status !== STATUS.PREPARATION) return { ok: false, reason: 'RECALL_NOT_PREP' };
   if (!unit.recallable) return { ok: false, reason: 'RECALL_LOCKED' };
   return { ok: true, unit };
 }
 
-function recallShadow(state, lane, slotIndex) {
-  const check = canRecall(state, lane, slotIndex);
+function recallShadow(state, unit) {
+  const check = canRecall(state, unit);
   if (!check.ok) return check;
-  const unit = check.unit;
   const refund = Math.round(unit.paidCost * GAME_DATA.config.recallRefundRate);
-  unit.alive = false;   // 슬롯 비움 (getSlotOccupant는 살아 있는 그림자만 봄)
-  state.permanentUnits = state.permanentUnits.filter((u) => u.uid !== unit.uid);
+  unit.alive = false;
+  state.basicUnits = state.basicUnits.filter((u) => u.uid !== unit.uid);
   addEnergy(state, refund);
   state.stats.energySpent -= refund;
   return { ok: true, unit, refund };
 }
 
-function createEnemy(state, enemyId, lane) {
+/* ---------- 잔영 / 그림자 추출 ---------- */
+
+function createRemnant(state, enemy) {
+  const duration = GAME_DATA.extraction.remnantDuration;
+  state.remnants.push({
+    uid: state.nextUid++,
+    sourceEnemyId: enemy.typeId,
+    x: enemy.x,
+    y: enemy.y,
+    ttl: duration,
+    duration,
+  });
+}
+
+function findRemnant(state, uid) {
+  if (uid === null || uid === undefined) return null;
+  return state.remnants.find((r) => r.uid === uid && r.ttl > 0) || null;
+}
+
+function getRemnantAt(state, x, y) {
+  let best = null;
+  let bestDist = 16;
+  for (const r of state.remnants) {
+    if (r.ttl <= 0) continue;
+    const d = dist(x, y, r.x, r.y);
+    if (d <= bestDist) { best = r; bestDist = d; }
+  }
+  return best;
+}
+
+function canExtract(state, remnantUid) {
+  if (!isFieldActive(state)) return { ok: false, reason: 'INVALID_STATUS' };
+  const remnant = findRemnant(state, remnantUid);
+  if (!remnant) return { ok: false, reason: 'EXTRACT_GONE' };   // 만료된 순간에는 추출 불가
+  const data = findExtractionData(remnant.sourceEnemyId);
+  if (!data) return { ok: false, reason: 'EXTRACT_GONE' };
+  if (countArmy(state) >= GAME_DATA.config.maxArmy) return { ok: false, reason: 'ARMY_FULL', remnant, data };
+  if (state.energy < data.cost) return { ok: false, reason: 'NOT_ENOUGH_ENERGY', remnant, data };
+  return { ok: true, remnant, data };
+}
+
+// 실패 시 에너지를 차감하지 않고 잔영도 그대로 둠.
+// 성공 시 잔영이 즉시 사라지므로 버튼을 연속으로 눌러도 그림자는 한 번만 생성됨
+function extractShadow(state, remnantUid) {
+  state.stats.extractionAttempts += 1;
+  const check = canExtract(state, remnantUid);
+  if (!check.ok) return check;
+  const { remnant, data } = check;
+  const ex = GAME_DATA.extraction;
+
+  state.energy -= data.cost;
+  state.stats.energySpent += data.cost;
+  state.remnants = state.remnants.filter((r) => r.uid !== remnant.uid);
+  if (state.selectedRemnantUid === remnant.uid) state.selectedRemnantUid = null;
+
+  const unit = {
+    uid: state.nextUid++,
+    kind: 'extracted',
+    sourceEnemyId: remnant.sourceEnemyId,
+    aiState: AI.SPAWN,
+    spawnTimer: ex.spawnDelay,
+    x: remnant.x,
+    y: remnant.y,
+    originX: 0,
+    originY: 0,
+    hp: data.maxHp,
+    maxHp: data.maxHp,
+    attack: data.attack,
+    moveSpeed: data.moveSpeed,
+    attackRange: data.attackRange,
+    attackInterval: data.attackInterval,
+    detectionRadius: ex.detectionRadius,
+    maxRoamRadius: ex.maxRoamRadius,
+    targetId: null,
+    cooldown: 0,
+    alive: true,
+    paidCost: data.cost,
+  };
+  clampToField(unit);   // 추출 그림자는 배치 제한 없이 맵 범위만 검사
+  unit.originX = unit.x;
+  unit.originY = unit.y;
+  state.extractedUnits.push(unit);
+  state.stats.extractionSuccesses += 1;
+  return { ok: true, unit, data };
+}
+
+/* ---------- 적 ---------- */
+
+function createEnemy(state, enemyId, spawnIndex) {
   const d = findEnemyData(enemyId);
+  const sp = GAME_DATA.field.spawnPoints[spawnIndex];
   return {
     uid: state.nextUid++,
     typeId: d.id,
-    lane,
-    x: GAME_DATA.field.spawnX,
+    spawn: spawnIndex,
+    x: sp.x,
+    y: sp.y,
+    radius: d.radius,
     hp: d.maxHp,
     maxHp: d.maxHp,
     attack: d.attack,
@@ -268,88 +455,117 @@ function createEnemy(state, enemyId, lane) {
     baseDamage: d.baseDamage,
     cooldown: 0,
     alive: true,
-    reachedBase: false,
+    reachedCore: false,
     moving: true,
   };
 }
 
-function getAllShadows(state) {
-  return state.permanentUnits.concat(state.temporaryUnits);
-}
+/* ---------- 대상 탐색 ---------- */
 
-// 그림자의 공격 대상: 같은 라인, 사거리 내, 가장 왼쪽(x 최소) → 동률이면 먼저 생성된 적
-function findShadowTargets(state, unit) {
-  const inRange = state.enemies.filter((e) =>
-    e.alive && e.lane === unit.lane && Math.abs(e.x - unit.x) <= unit.attackRange);
-  inRange.sort((a, b) => (a.x - b.x) || (a.uid - b.uid));
+// 기본 그림자: 사거리 내 적 중 거점에 가장 가까운 적 → 동률이면 먼저 생성된 적
+function findBasicTargets(state, unit) {
+  const core = GAME_DATA.field.core;
+  const inRange = state.enemies.filter((e) => e.alive && dist(e.x, e.y, unit.x, unit.y) <= unit.attackRange);
   if (inRange.length === 0) return [];
+  inRange.sort((a, b) => (dist(a.x, a.y, core.x, core.y) - dist(b.x, b.y, core.x, core.y)) || (a.uid - b.uid));
   return unit.targetType === 'all_in_range' ? inRange : [inRange[0]];
 }
 
-// 적의 공격 대상: 같은 라인, 사거리 내 가장 가까운 그림자 → 동률이면 먼저 생성된 그림자
+// 적: 사거리 내 가장 가까운 그림자(기본·추출) → 동률이면 먼저 생성된 그림자
 function findEnemyTarget(state, enemy) {
   let best = null;
   let bestDist = Infinity;
   for (const s of getAllShadows(state)) {
-    if (!s.alive || s.lane !== enemy.lane) continue;
-    const dist = Math.abs(enemy.x - s.x);
-    if (dist > enemy.attackRange) continue;
-    if (dist < bestDist || (dist === bestDist && s.uid < best.uid)) {
+    if (!s.alive) continue;
+    const d = dist(enemy.x, enemy.y, s.x, s.y);
+    if (d > enemy.attackRange) continue;
+    if (d < bestDist || (d === bestDist && s.uid < best.uid)) {
       best = s;
-      bestDist = dist;
+      bestDist = d;
     }
   }
   return best;
 }
 
+// 추출 그림자가 이 적을 쫓을 수 있는가:
+//  - 그림자 기준 탐색 반경 안
+//  - 적이 이동 제한 범위(원점 기준 maxRoamRadius) + 공격 사거리 안 → 범위 밖으로 나가면 추격 중단
+function canChase(shadow, enemy) {
+  if (!enemy || !enemy.alive) return false;
+  if (dist(shadow.x, shadow.y, enemy.x, enemy.y) > shadow.detectionRadius) return false;
+  return dist(shadow.originX, shadow.originY, enemy.x, enemy.y) <= shadow.maxRoamRadius + shadow.attackRange;
+}
+
+// 추격 대상: 쫓을 수 있는 적 중 가장 가까운 적 → 동률이면 생성 ID가 빠른 적
+function findChaseTarget(state, shadow) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const e of state.enemies) {
+    if (!canChase(shadow, e)) continue;
+    const d = dist(shadow.x, shadow.y, e.x, e.y);
+    if (d < bestDist || (d === bestDist && e.uid < best.uid)) {
+      best = e;
+      bestDist = d;
+    }
+  }
+  return best;
+}
+
+/* ---------- 웨이브 ---------- */
+
 function startWave(state) {
   if (state.status !== STATUS.PREPARATION) return false;
   if (!getWaveData(state.wave)) return false;
   if (state.wave >= 2) addEnergy(state, GAME_DATA.config.waveStartBonus);
-  for (const u of state.permanentUnits) u.recallable = false;   // 전투에 들어간 그림자는 회수 잠금
+  for (const u of state.basicUnits) u.recallable = false;   // 전투에 들어간 그림자는 회수 잠금
   state.spawnIndex = 0;
   state.spawnTimer = 0;   // 첫 적은 즉시 생성
+  state.stats.waveKills = 0;
   return setStatus(state, STATUS.PLAYING);
 }
 
 // WAVE_CLEAR → 다음 웨이브 PREPARATION
+// 추출 그림자는 HP 0 또는 게임 종료까지 유지. 남은 잔영은 준비 단계에서도 추출 가능(타이머는 전투 중에만 감소)
 function goToNextWave(state) {
   if (state.status !== STATUS.WAVE_CLEAR) return false;
   state.wave += 1;
-  state.remnants = [];
-  state.temporaryUnits = [];
   return setStatus(state, STATUS.PREPARATION);
 }
 
 
 /* ==================================================================
- * [4] 전투 틱 — 기획서 9-1 처리 순서
+ * [4] 전투 틱
  *  사망한 객체는 반복 도중 바로 지우지 않고 alive=false로 표시한 뒤
  *  틱 마지막에 한꺼번에 제거합니다.
+ *  일시정지·준비 단계에서는 이 함수가 아무것도 하지 않으므로
+ *  이동, 공격, 잔영 타이머가 모두 멈춥니다.
  * ================================================================== */
 function updateGame(state, dt) {
   if (state.status !== STATUS.PLAYING) return;
   state.elapsed += dt;
 
   updateSpawning(state, dt);              // 1. 적 생성
-  // 2. 잔영 시간 갱신 → DAY 3
-  updateEnemyMovement(state, dt);         // 3. 적 이동 / 기지 도달
-  if (state.baseHp <= 0) {                // 기지 HP 0 → 즉시 패배
+  updateRemnants(state, dt);              // 2. 잔영 시간 갱신
+  updateEnemyMovement(state, dt);         // 3. 적 이동 / 거점 도달
+  if (state.coreHp <= 0) {                //    거점 HP 0 → 즉시 패배
     cleanupDead(state);
+    state.selectedRemnantUid = null;
     setStatus(state, STATUS.DEFEAT);
     return;
   }
-  updateCooldowns(state, dt);             // 4. 쿨타임
-  const killed = processShadowAttacks(state); // 5. 그림자 공격
+  updateExtractedAI(state, dt);           // 4. 추출 그림자 탐색 / 추격 / 복귀
+  updateCooldowns(state, dt);             // 5. 쿨타임
+  const killed = processShadowAttacks(state); // 6. 그림자 공격 (기본 + 추출)
   processEnemyAttacks(state);             //    적 공격 (이번 틱에 죽은 적은 공격하지 않음)
-  for (const enemy of killed) {           // 6. 처치 보상 (사망 1회당 1번)
+  for (const enemy of killed) {           // 7. 처치 보상 + 잔영 생성 (사망 1회당 1번)
     state.stats.kills += 1;
+    state.stats.waveKills += 1;
     addEnergy(state, GAME_DATA.config.killReward);
-    // 잔영 생성 확률 판정 → DAY 3
+    if (Math.random() < GAME_DATA.extraction.remnantChance) createRemnant(state, enemy);
   }
-  cleanupDead(state);                     // 7. 사망 객체 일괄 제거
+  cleanupDead(state);                     // 8. 사망 객체 일괄 제거
   updateEffects(state, dt);
-  checkWaveComplete(state);               // 8. 웨이브 완료 판정
+  checkWaveComplete(state);               // 9. 웨이브 완료 판정
 }
 
 function updateSpawning(state, dt) {
@@ -358,28 +574,89 @@ function updateSpawning(state, dt) {
   state.spawnTimer -= dt;
   while (state.spawnTimer <= 0 && state.spawnIndex < wave.enemies.length) {
     const entry = wave.enemies[state.spawnIndex];
-    state.enemies.push(createEnemy(state, entry.enemyId, entry.lane));
+    state.enemies.push(createEnemy(state, entry.enemyId, entry.spawn));
     state.spawnIndex += 1;
     state.spawnTimer += wave.spawnInterval;
   }
 }
 
+function updateRemnants(state, dt) {
+  for (const r of state.remnants) r.ttl -= dt;
+  const before = state.selectedRemnantUid;
+  state.remnants = state.remnants.filter((r) => r.ttl > 0);
+  if (before !== null && !findRemnant(state, before)) {
+    state.selectedRemnantUid = null;
+    state.events.push('REMNANT_EXPIRED');
+  }
+}
+
 function updateEnemyMovement(state, dt) {
-  const baseX = GAME_DATA.field.baseX;
+  const core = GAME_DATA.field.core;
   for (const e of state.enemies) {
     if (!e.alive) continue;
-    const target = findEnemyTarget(state, e);
-    e.moving = !target;               // 사거리 안에 그림자가 있으면 멈춤
+    e.moving = !findEnemyTarget(state, e);   // 사거리 안에 그림자가 있으면 멈추고 공격
     if (!e.moving) continue;
-    e.x -= e.moveSpeed * dt;
-    if (e.x <= baseX) {
-      e.x = baseX;
-      e.alive = false;                // 처치가 아니므로 보상 없음
-      e.reachedBase = true;
-      state.baseHp = Math.max(0, state.baseHp - e.baseDamage);
-      state.stats.baseDamageTaken += e.baseDamage;
+    moveToward(e, core.x, core.y, e.moveSpeed * dt, 0);
+    if (dist(e.x, e.y, core.x, core.y) <= core.radius + e.radius) {
+      e.alive = false;                // 처치가 아니므로 보상·잔영 없음
+      e.reachedCore = true;
+      state.coreHp = Math.max(0, state.coreHp - e.baseDamage);
+      state.stats.coreDamageTaken += e.baseDamage;
     }
   }
+}
+
+// 추출 그림자 AI: SPAWN → IDLE → CHASE → ATTACK → (대상 사망) → IDLE / RETURN
+function updateExtractedAI(state, dt) {
+  const ex = GAME_DATA.extraction;
+  for (const s of state.extractedUnits) {
+    if (!s.alive) continue;
+
+    if (s.aiState === AI.SPAWN) {
+      s.spawnTimer -= dt;
+      if (s.spawnTimer > 0) continue;
+      s.aiState = AI.IDLE;
+    }
+
+    // 현재 대상이 사라졌거나 범위를 벗어나면 즉시 새 대상 탐색
+    let target = s.targetId === null ? null : state.enemies.find((e) => e.uid === s.targetId);
+    if (!canChase(s, target)) target = findChaseTarget(state, s);
+    s.targetId = target ? target.uid : null;
+
+    if (target) {
+      if (dist(s.x, s.y, target.x, target.y) <= s.attackRange) {
+        s.aiState = AI.ATTACK;
+        continue;
+      }
+      s.aiState = AI.CHASE;
+      moveToward(s, target.x, target.y, s.moveSpeed * dt, s.attackRange * 0.9);
+      clampToRoam(s);
+      clampToField(s);
+      continue;
+    }
+
+    // 추격할 적이 없음: 원점에서 멀면 복귀, 아니면 대기
+    const fromOrigin = dist(s.x, s.y, s.originX, s.originY);
+    if (s.aiState === AI.RETURN || fromOrigin > ex.returnThreshold) {
+      s.aiState = AI.RETURN;
+      moveToward(s, s.originX, s.originY, s.moveSpeed * dt, 0);
+      if (dist(s.x, s.y, s.originX, s.originY) < 0.5) {
+        s.x = s.originX;
+        s.y = s.originY;
+        s.aiState = AI.IDLE;
+      }
+    } else {
+      s.aiState = AI.IDLE;
+    }
+  }
+}
+
+// 원점 기준 maxRoamRadius 밖으로 나가지 않도록
+function clampToRoam(s) {
+  const d = dist(s.x, s.y, s.originX, s.originY);
+  if (d <= s.maxRoamRadius) return;
+  s.x = s.originX + ((s.x - s.originX) / d) * s.maxRoamRadius;
+  s.y = s.originY + ((s.y - s.originY) / d) * s.maxRoamRadius;
 }
 
 function updateCooldowns(state, dt) {
@@ -389,16 +666,26 @@ function updateCooldowns(state, dt) {
 
 function processShadowAttacks(state) {
   const killed = [];
-  for (const u of getAllShadows(state)) {
+  // 기본 그림자: 제자리에서 사거리 내 적 공격
+  for (const u of state.basicUnits) {
     if (!u.alive || u.cooldown > 0) continue;
-    const targets = findShadowTargets(state, u);
+    const targets = findBasicTargets(state, u);
     if (targets.length === 0) continue;   // 대상이 없으면 쿨타임 0 유지 → 대상이 오면 즉시 공격
     const dmg = calcDamage(u.attack);
     for (const t of targets) {
       if (applyDamage(t, dmg)) killed.push(t);
-      addEffect(state, u.x, u.lane, t.x, t.lane, 'shadow');
+      addEffect(state, u.x, u.y, t.x, t.y, 'shadow');
     }
     u.cooldown = u.attackInterval;
+  }
+  // 추출 그림자: ATTACK 상태일 때 추격 대상 공격
+  for (const s of state.extractedUnits) {
+    if (!s.alive || s.aiState !== AI.ATTACK || s.cooldown > 0) continue;
+    const t = state.enemies.find((e) => e.uid === s.targetId);
+    if (!t || !t.alive || dist(s.x, s.y, t.x, t.y) > s.attackRange) continue;
+    if (applyDamage(t, calcDamage(s.attack))) killed.push(t);   // 추출 그림자의 처치도 잔영 생성
+    addEffect(state, s.x, s.y, t.x, t.y, 'extracted');
+    s.cooldown = s.attackInterval;
   }
   return killed;
 }
@@ -409,28 +696,28 @@ function processEnemyAttacks(state) {
     const target = findEnemyTarget(state, e);   // 매번 다시 찾음 → 이미 죽은 그림자 공격 방지
     if (!target) continue;
     applyDamage(target, calcDamage(e.attack));
-    addEffect(state, e.x, e.lane, target.x, target.lane, 'enemy');
+    addEffect(state, e.x, e.y, target.x, target.y, 'enemy');
     e.cooldown = e.attackInterval;
   }
 }
 
 function cleanupDead(state) {
   state.enemies = state.enemies.filter((e) => e.alive);
-  state.permanentUnits = state.permanentUnits.filter((u) => u.alive);  // 죽으면 슬롯이 비워짐
-  state.temporaryUnits = state.temporaryUnits.filter((u) => u.alive);
+  state.basicUnits = state.basicUnits.filter((u) => u.alive);
+  state.extractedUnits = state.extractedUnits.filter((u) => u.alive);
 }
 
 function checkWaveComplete(state) {
   const wave = getWaveData(state.wave);
   if (!wave) return;
   if (state.spawnIndex < wave.enemies.length || state.enemies.length > 0) return;
-  state.remnants = [];
-  state.temporaryUnits = [];
-  setStatus(state, state.wave >= GAME_DATA.waves.length ? STATUS.VICTORY : STATUS.WAVE_CLEAR);
+  const isLast = state.wave >= GAME_DATA.waves.length;
+  if (isLast) state.selectedRemnantUid = null;
+  setStatus(state, isLast ? STATUS.VICTORY : STATUS.WAVE_CLEAR);
 }
 
-function addEffect(state, x1, lane1, x2, lane2, kind) {
-  state.effects.push({ x1, lane1, x2, lane2, kind, ttl: 0.12 });
+function addEffect(state, x1, y1, x2, y2, kind) {
+  state.effects.push({ x1, y1, x2, y2, kind, ttl: 0.12 });
 }
 
 function updateEffects(state, dt) {
@@ -446,12 +733,20 @@ function validateGameData(data) {
   const errors = [];
   const isPos = (v) => typeof v === 'number' && Number.isFinite(v) && v > 0;
   const c = data.config;
+  const F = data.field;
   if (!isPos(c.startEnergy) || !isPos(c.maxEnergy)) errors.push('config: startEnergy / maxEnergy는 0보다 큰 숫자여야 합니다.');
   if (c.startEnergy > c.maxEnergy) errors.push('config: startEnergy가 maxEnergy보다 큽니다.');
-  if (!isPos(c.baseHp)) errors.push('config: baseHp는 0보다 큰 숫자여야 합니다.');
+  if (!isPos(c.coreHp)) errors.push('config: coreHp는 0보다 큰 숫자여야 합니다.');
+  if (!Number.isInteger(c.maxArmy) || c.maxArmy < 1) errors.push('config: maxArmy는 1 이상의 정수여야 합니다.');
+  if (!Number.isInteger(c.maxBasic) || c.maxBasic < 1 || c.maxBasic > c.maxArmy) errors.push('config: maxBasic은 1 이상, maxArmy 이하의 정수여야 합니다.');
   if (typeof c.recallRefundRate !== 'number' || c.recallRefundRate < 0 || c.recallRefundRate > 1) errors.push('config: recallRefundRate는 0~1 사이 숫자여야 합니다.');
-  if (!data.field.laneY.length) errors.push('field: laneY가 비어 있습니다.');
-  if (!data.field.permanentSlotX.length) errors.push('field: permanentSlotX가 비어 있습니다.');
+
+  if (!isPos(F.width) || !isPos(F.height)) errors.push('field: width / height가 올바르지 않습니다.');
+  if (!F.core || !isPos(F.core.radius)) errors.push('field: core.radius가 올바르지 않습니다.');
+  if (!F.spawnPoints.length) errors.push('field: spawnPoints가 비어 있습니다.');
+  F.spawnPoints.forEach((sp, i) => {
+    if (!(sp.x >= 0 && sp.x <= F.width && sp.y >= 0 && sp.y <= F.height)) errors.push(`field.spawnPoints[${i}]: 맵 밖 좌표입니다.`);
+  });
 
   const ids = new Set();
   for (const s of data.shadows) {
@@ -465,17 +760,33 @@ function validateGameData(data) {
   for (const e of data.enemies) {
     if (ids.has(e.id)) errors.push(`enemies: 중복 ID ${e.id}`);
     ids.add(e.id);
-    for (const k of ['maxHp', 'attack', 'moveSpeed', 'attackInterval', 'attackRange', 'baseDamage']) {
+    for (const k of ['maxHp', 'attack', 'moveSpeed', 'attackInterval', 'attackRange', 'baseDamage', 'radius']) {
       if (!isPos(e[k])) errors.push(`enemies ${e.id}: ${k} 값이 올바르지 않습니다 (${e[k]}).`);
     }
   }
+
+  const ex = data.extraction;
+  if (typeof ex.remnantChance !== 'number' || ex.remnantChance < 0 || ex.remnantChance > 1) errors.push('extraction: remnantChance는 0~1 사이 숫자여야 합니다.');
+  for (const k of ['remnantDuration', 'detectionRadius', 'maxRoamRadius', 'returnThreshold']) {
+    if (!isPos(ex[k])) errors.push(`extraction: ${k} 값이 올바르지 않습니다 (${ex[k]}).`);
+  }
+  for (const e of data.enemies) {
+    if (!ex.units.some((u) => u.sourceEnemyId === e.id)) errors.push(`extraction.units: ${e.id}의 추출 데이터가 없습니다.`);
+  }
+  for (const u of ex.units) {
+    if (!data.enemies.some((e) => e.id === u.sourceEnemyId)) errors.push(`extraction.units: 없는 적 ID ${u.sourceEnemyId}`);
+    for (const k of ['cost', 'maxHp', 'attack', 'moveSpeed', 'attackRange', 'attackInterval']) {
+      if (!isPos(u[k])) errors.push(`extraction.units ${u.sourceEnemyId}: ${k} 값이 올바르지 않습니다 (${u[k]}).`);
+    }
+  }
+
   if (!data.waves.length) errors.push('waves: 웨이브가 없습니다.');
   data.waves.forEach((w, i) => {
     if (!isPos(w.spawnInterval)) errors.push(`waves[${i}]: spawnInterval 값이 올바르지 않습니다.`);
     if (!w.enemies.length) errors.push(`waves[${i}]: 적이 없습니다.`);
     w.enemies.forEach((en, j) => {
       if (!data.enemies.some((d) => d.id === en.enemyId)) errors.push(`waves[${i}].enemies[${j}]: 없는 적 ID ${en.enemyId}`);
-      if (!Number.isInteger(en.lane) || en.lane < 0 || en.lane >= data.field.laneY.length) errors.push(`waves[${i}].enemies[${j}]: lane은 0~${data.field.laneY.length - 1} 사이여야 합니다.`);
+      if (!Number.isInteger(en.spawn) || en.spawn < 0 || en.spawn >= F.spawnPoints.length) errors.push(`waves[${i}].enemies[${j}]: spawn은 0~${F.spawnPoints.length - 1} 사이여야 합니다.`);
     });
   });
   return errors;
@@ -486,33 +797,29 @@ function validateGameData(data) {
  * [5] 렌더링 (Canvas) — 게임 규칙을 바꾸지 않고 그리기만 함
  * ================================================================== */
 const COLORS = {
-  bg: '#0c0e18', laneA: '#131726', laneB: '#161b2d', laneLine: '#252b43',
-  base: '#2c1022', baseLine: '#ff4d6d', spawn: '#3a3f5c',
-  slot: '#1d2340', slotBorder: '#46507a', slotOk: '#3ddc97', slotBad: '#ff5c7a', slotRecall: '#ffcf5c', tempSlot: '#5d4b91',
-  text: '#e6e8f2', subText: '#8b91b0', hpBack: 'rgba(0,0,0,0.6)', hpShadow: '#7cc4ff', hpEnemy: '#ff6b6b',
-  fxShadow: '#b9a6ff', fxEnemy: '#ff9a6b', range: 'rgba(124,196,255,0.10)', rangeEnemy: 'rgba(255,107,107,0.25)',
+  bg: '#0b0d17', grid: 'rgba(255,255,255,0.03)', arena: '#11152a', arenaLine: '#262d4b',
+  core: '#1d1233', coreLine: '#8b6cff', coreHp: '#3ddc97', coreHpLow: '#ff5c7a',
+  spawn: '#ff5c7a', noZone: 'rgba(255,92,122,0.09)', noZoneLine: 'rgba(255,92,122,0.35)',
+  ghostOk: '#3ddc97', ghostBad: '#ff5c7a', recall: '#ffcf5c',
+  remnant: '#7b5cff', remnantRing: '#c9b8ff', selected: '#ffffff',
+  extracted: '#241a46', extractedLine: '#a98bff',
+  text: '#e6e8f2', subText: '#8b91b0', hpBack: 'rgba(0,0,0,0.6)',
+  hpShadow: '#7cc4ff', hpExtracted: '#c3b2ff', hpEnemy: '#ff6b6b',
+  fxShadow: '#9fd0ff', fxExtracted: '#c9b8ff', fxEnemy: '#ff9a6b',
+  range: 'rgba(124,196,255,0.10)', rangeLine: 'rgba(124,196,255,0.35)',
+  detect: 'rgba(185,166,255,0.45)', roam: 'rgba(185,166,255,0.06)', rangeEnemy: 'rgba(255,107,107,0.35)',
 };
 
-function laneHeight() { return GAME_DATA.field.height / GAME_DATA.field.laneY.length; }
-
-function getSlotAt(x, y) {
-  const F = GAME_DATA.field;
-  const half = F.slotSize / 2;
-  for (let lane = 0; lane < F.laneY.length; lane++) {
-    for (let slotIndex = 0; slotIndex < F.permanentSlotX.length; slotIndex++) {
-      if (Math.abs(x - F.permanentSlotX[slotIndex]) <= half && Math.abs(y - F.laneY[lane]) <= half) {
-        return { lane, slotIndex };
-      }
-    }
-  }
-  return null;
+function drawCircle(ctx, x, y, r) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
 }
 
 function drawHpBar(ctx, cx, top, width, ratio, color) {
   ctx.fillStyle = COLORS.hpBack;
-  ctx.fillRect(cx - width / 2, top, width, 5);
+  ctx.fillRect(cx - width / 2, top, width, 4);
   ctx.fillStyle = color;
-  ctx.fillRect(cx - width / 2, top, width * Math.max(0, Math.min(1, ratio)), 5);
+  ctx.fillRect(cx - width / 2, top, width * Math.max(0, Math.min(1, ratio)), 4);
 }
 
 function drawRoundRect(ctx, x, y, w, h, r) {
@@ -525,139 +832,213 @@ function drawRoundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-function render(ctx, state, view) {
-  const F = GAME_DATA.field;
-  const lh = laneHeight();
-
-  ctx.fillStyle = COLORS.bg;
-  ctx.fillRect(0, 0, F.width, F.height);
-
-  // 라인
-  F.laneY.forEach((y, i) => {
-    ctx.fillStyle = i % 2 === 0 ? COLORS.laneA : COLORS.laneB;
-    ctx.fillRect(0, y - lh / 2, F.width, lh);
-    ctx.strokeStyle = COLORS.laneLine;
-    ctx.beginPath(); ctx.moveTo(0, y + lh / 2); ctx.lineTo(F.width, y + lh / 2); ctx.stroke();
-    ctx.fillStyle = COLORS.subText;
-    ctx.font = 'bold 13px sans-serif';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-    ctx.fillText(`L${i + 1}`, F.baseX + 8, y - lh / 2 + 6);
-  });
-
-  // 기지
-  ctx.fillStyle = COLORS.base;
-  ctx.fillRect(0, 0, F.baseX, F.height);
-  ctx.strokeStyle = COLORS.baseLine;
-  ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.moveTo(F.baseX, 0); ctx.lineTo(F.baseX, F.height); ctx.stroke();
-  ctx.lineWidth = 1;
-  ctx.save();
-  ctx.translate(F.baseX / 2, F.height / 2);
-  ctx.rotate(-Math.PI / 2);
-  ctx.fillStyle = COLORS.baseLine;
-  ctx.font = 'bold 14px sans-serif';
+function drawLabel(ctx, text, x, y, color, font) {
+  ctx.fillStyle = color;
+  ctx.font = font || '11px sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('기지', 0, 0);
-  ctx.restore();
+  ctx.fillText(text, x, y);
+}
 
-  // 적 생성 위치
-  ctx.strokeStyle = COLORS.spawn;
-  ctx.setLineDash([6, 6]);
-  ctx.beginPath(); ctx.moveTo(F.spawnX, 0); ctx.lineTo(F.spawnX, F.height); ctx.stroke();
+function render(ctx, state, view) {
+  const F = GAME_DATA.field;
+  const core = F.core;
+  const P = F.placement;
+  const placing = !!state.selectedShadowId && isFieldActive(state);
+
+  // 배경 + 격자
+  ctx.fillStyle = COLORS.bg;
+  ctx.fillRect(0, 0, F.width, F.height);
+  ctx.strokeStyle = COLORS.grid;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let x = 40; x < F.width; x += 40) { ctx.moveTo(x, 0); ctx.lineTo(x, F.height); }
+  for (let y = 30; y < F.height; y += 40) { ctx.moveTo(0, y); ctx.lineTo(F.width, y); }
+  ctx.stroke();
+
+  // 원형 전장 디자인 (판정은 직사각형 전장 전체)
+  ctx.fillStyle = COLORS.arena;
+  drawCircle(ctx, core.x, core.y, 250); ctx.fill();
+  ctx.strokeStyle = COLORS.arenaLine;
+  ctx.stroke();
+  ctx.setLineDash([6, 8]);
+  drawCircle(ctx, core.x, core.y, 150); ctx.stroke();
   ctx.setLineDash([]);
 
-  // 슬롯
-  const half = F.slotSize / 2;
-  F.laneY.forEach((y, lane) => {
-    // 추출 슬롯 자리 (DAY 3에서 사용)
-    ctx.strokeStyle = COLORS.tempSlot;
-    ctx.setLineDash([4, 4]);
-    ctx.strokeRect(F.temporarySlotX - half + 8, y - half + 8, F.slotSize - 16, F.slotSize - 16);
-    ctx.setLineDash([]);
-
-    F.permanentSlotX.forEach((x, slotIndex) => {
-      const occupied = !!getSlotOccupant(state, lane, slotIndex);
-      const isHover = view.hoverSlot && view.hoverSlot.lane === lane && view.hoverSlot.slotIndex === slotIndex;
-      ctx.fillStyle = COLORS.slot;
-      drawRoundRect(ctx, x - half, y - half, F.slotSize, F.slotSize, 8);
+  // 배치 불가 구역 (카드 선택 중에만)
+  if (placing) {
+    ctx.fillStyle = COLORS.noZone;
+    ctx.fillRect(0, 0, F.width, P.edgeClear);
+    ctx.fillRect(0, F.height - P.edgeClear, F.width, P.edgeClear);
+    ctx.fillRect(0, P.edgeClear, P.edgeClear, F.height - P.edgeClear * 2);
+    ctx.fillRect(F.width - P.edgeClear, P.edgeClear, P.edgeClear, F.height - P.edgeClear * 2);
+    ctx.strokeStyle = COLORS.noZoneLine;
+    const zones = [{ x: core.x, y: core.y, r: P.coreClear }]
+      .concat(F.spawnPoints.map((sp) => ({ x: sp.x, y: sp.y, r: P.spawnClear })))
+      .concat(state.basicUnits.filter((u) => u.alive).map((u) => ({ x: u.x, y: u.y, r: P.basicSpacing })));
+    for (const z of zones) {
+      drawCircle(ctx, z.x, z.y, z.r);
       ctx.fill();
-      ctx.strokeStyle = COLORS.slotBorder;
-      if (isHover && state.selectedShadowId && !occupied) {
-        ctx.strokeStyle = canSummon(state, state.selectedShadowId, lane, slotIndex).ok ? COLORS.slotOk : COLORS.slotBad;
-        ctx.lineWidth = 3;
-      } else if (isHover && occupied && canRecall(state, lane, slotIndex).ok) {
-        ctx.strokeStyle = COLORS.slotRecall;   // 회수 가능한 그림자에 마우스를 올리면 노란 테두리
-        ctx.lineWidth = 3;
-      }
       ctx.stroke();
-      ctx.lineWidth = 1;
-    });
-  });
-
-  // 사거리 표시 (D 키)
-  if (view.showRanges) {
-    for (const u of getAllShadows(state)) {
-      const y = F.laneY[u.lane];
-      ctx.fillStyle = COLORS.range;
-      ctx.fillRect(u.x - u.attackRange, y - lh / 2 + 2, u.attackRange * 2, lh - 4);
-    }
-    for (const e of state.enemies) {
-      const y = F.laneY[e.lane];
-      ctx.fillStyle = COLORS.rangeEnemy;
-      ctx.fillRect(e.x - e.attackRange, y - 2, e.attackRange, 4);
     }
   }
 
-  // 그림자
-  for (const u of getAllShadows(state)) {
+  // 적 출현 지점
+  F.spawnPoints.forEach((sp) => {
+    ctx.strokeStyle = COLORS.spawn;
+    ctx.setLineDash([4, 4]);
+    drawCircle(ctx, sp.x, sp.y, 14); ctx.stroke();
+    ctx.setLineDash([]);
+    const lx = sp.x + (sp.x < 100 ? 30 : sp.x > F.width - 100 ? -30 : 0);
+    const ly = sp.y + (sp.y < 100 ? 26 : sp.y > F.height - 100 ? -26 : 0);
+    drawLabel(ctx, sp.label, lx, ly, COLORS.spawn, 'bold 12px sans-serif');
+  });
+
+  // 중앙 거점 + HP 링
+  const hpRatio = state.coreHp / state.maxCoreHp;
+  ctx.fillStyle = COLORS.core;
+  drawCircle(ctx, core.x, core.y, core.radius); ctx.fill();
+  ctx.strokeStyle = COLORS.coreLine;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = hpRatio <= 0.3 ? COLORS.coreHpLow : COLORS.coreHp;
+  ctx.beginPath();
+  ctx.arc(core.x, core.y, core.radius + 7, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * hpRatio);
+  ctx.stroke();
+  ctx.lineWidth = 1;
+  drawLabel(ctx, '거점', core.x, core.y - 8, COLORS.coreLine, 'bold 14px sans-serif');
+  drawLabel(ctx, `${state.coreHp} / ${state.maxCoreHp}`, core.x, core.y + 10, COLORS.text, '12px sans-serif');
+
+  // 범위 표시 (D 키)
+  if (view.showRanges) {
+    for (const u of state.basicUnits) {
+      ctx.fillStyle = COLORS.range;
+      ctx.strokeStyle = COLORS.rangeLine;
+      drawCircle(ctx, u.x, u.y, u.attackRange); ctx.fill(); ctx.stroke();
+    }
+    for (const s of state.extractedUnits) {
+      ctx.fillStyle = COLORS.roam;
+      drawCircle(ctx, s.originX, s.originY, s.maxRoamRadius); ctx.fill();
+      ctx.strokeStyle = COLORS.detect;
+      ctx.setLineDash([3, 5]);
+      drawCircle(ctx, s.x, s.y, s.detectionRadius); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(s.originX - 4, s.originY); ctx.lineTo(s.originX + 4, s.originY);
+      ctx.moveTo(s.originX, s.originY - 4); ctx.lineTo(s.originX, s.originY + 4);
+      ctx.stroke();
+      drawLabel(ctx, s.aiState, s.x, s.y + 26, COLORS.hpExtracted, '9px monospace');
+    }
+    for (const e of state.enemies) {
+      ctx.strokeStyle = COLORS.rangeEnemy;
+      drawCircle(ctx, e.x, e.y, e.attackRange); ctx.stroke();
+    }
+  }
+
+  // 잔영
+  for (const r of state.remnants) {
+    const pulse = 0.55 + 0.25 * Math.sin(view.time * 5 + r.uid);
+    const isSelected = state.selectedRemnantUid === r.uid;
+    const isHover = view.hoverRemnantUid === r.uid;
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = COLORS.remnant;
+    drawCircle(ctx, r.x, r.y, 9); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = COLORS.remnantRing;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, 13, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (r.ttl / r.duration));
+    ctx.stroke();
+    if (isSelected || isHover) {
+      ctx.strokeStyle = isSelected ? COLORS.selected : COLORS.remnantRing;
+      ctx.lineWidth = isSelected ? 2 : 1;
+      drawCircle(ctx, r.x, r.y, 18); ctx.stroke();
+    }
+    ctx.lineWidth = 1;
+  }
+
+  // 기본 그림자
+  for (const u of state.basicUnits) {
     const d = findShadowData(u.typeId);
-    const y = F.laneY[u.lane];
     ctx.fillStyle = d ? d.color : '#888';
-    drawRoundRect(ctx, u.x - 20, y - 20, 40, 40, 8);
+    drawRoundRect(ctx, u.x - 15, u.y - 15, 30, 30, 7);
     ctx.fill();
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 16px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(d ? d.name[0] : '?', u.x, y + 1);
-    ctx.fillStyle = COLORS.text;
-    ctx.font = '11px sans-serif';
-    ctx.fillText(d ? d.name : '', u.x, y + 32);
-    drawHpBar(ctx, u.x, y - 30, 44, u.hp / u.maxHp, COLORS.hpShadow);
+    if (view.hoverBasicUid === u.uid && canRecall(state, u).ok) {
+      ctx.strokeStyle = COLORS.recall;   // 회수 가능한 그림자에 마우스를 올리면 노란 테두리
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+    drawLabel(ctx, d ? d.name[0] : '?', u.x, u.y + 1, '#fff', 'bold 14px sans-serif');
+    drawLabel(ctx, d ? d.name : '', u.x, u.y + 26, COLORS.text);
+    drawHpBar(ctx, u.x, u.y - 24, 34, u.hp / u.maxHp, COLORS.hpShadow);
+  }
+
+  // 추출 그림자
+  for (const s of state.extractedUnits) {
+    const src = findEnemyData(s.sourceEnemyId);
+    const r = Math.round((src ? src.radius : 14) * 0.9);
+    const spawnRatio = s.aiState === AI.SPAWN ? 1 - s.spawnTimer / GAME_DATA.extraction.spawnDelay : 1;
+    ctx.globalAlpha = 0.35 + 0.65 * Math.max(0, Math.min(1, spawnRatio));
+    ctx.save();
+    ctx.shadowColor = COLORS.extractedLine;
+    ctx.shadowBlur = 10;
+    ctx.fillStyle = COLORS.extracted;
+    drawCircle(ctx, s.x, s.y, r); ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle = COLORS.extractedLine;
+    ctx.lineWidth = 2;
+    drawCircle(ctx, s.x, s.y, r); ctx.stroke();
+    ctx.lineWidth = 1;
+    drawLabel(ctx, src ? src.name[0] : '?', s.x, s.y + 1, COLORS.hpExtracted, 'bold 12px sans-serif');
+    ctx.globalAlpha = 1;
+    drawHpBar(ctx, s.x, s.y - r - 9, 28, s.hp / s.maxHp, COLORS.hpExtracted);
   }
 
   // 적
   for (const e of state.enemies) {
     const d = findEnemyData(e.typeId);
-    const y = F.laneY[e.lane];
-    const r = d.radius || 16;
-    ctx.fillStyle = d.color || '#c66';
-    ctx.beginPath(); ctx.arc(e.x, y, r, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = e.moving ? 'rgba(0,0,0,0.4)' : '#ffffff';
+    ctx.fillStyle = d.color;
+    drawCircle(ctx, e.x, e.y, e.radius); ctx.fill();
+    ctx.strokeStyle = e.moving ? 'rgba(0,0,0,0.4)' : '#ffffff';   // 멈춰서 싸우는 중이면 흰 테두리
     ctx.lineWidth = e.moving ? 1 : 2;
     ctx.stroke();
     ctx.lineWidth = 1;
-    ctx.fillStyle = COLORS.text;
-    ctx.font = '11px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(d.name, e.x, y + r + 12);
-    drawHpBar(ctx, e.x, y - r - 10, 36, e.hp / e.maxHp, COLORS.hpEnemy);
+    drawLabel(ctx, d.name, e.x, e.y + e.radius + 10, COLORS.text, '10px sans-serif');
+    drawHpBar(ctx, e.x, e.y - e.radius - 9, 30, e.hp / e.maxHp, COLORS.hpEnemy);
   }
 
   // 공격 선
   for (const fx of state.effects) {
-    ctx.strokeStyle = fx.kind === 'shadow' ? COLORS.fxShadow : COLORS.fxEnemy;
+    ctx.strokeStyle = fx.kind === 'shadow' ? COLORS.fxShadow : fx.kind === 'extracted' ? COLORS.fxExtracted : COLORS.fxEnemy;
     ctx.globalAlpha = Math.max(0, fx.ttl / 0.12);
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(fx.x1, F.laneY[fx.lane1]);
-    ctx.lineTo(fx.x2, F.laneY[fx.lane2]);
+    ctx.moveTo(fx.x1, fx.y1);
+    ctx.lineTo(fx.x2, fx.y2);
     ctx.stroke();
     ctx.globalAlpha = 1;
     ctx.lineWidth = 1;
+  }
+
+  // 배치 미리보기 (카드 선택 중 마우스 위치)
+  if (placing && view.mouse && view.hoverRemnantUid === null) {
+    const d = findShadowData(state.selectedShadowId);
+    const ok = canSummon(state, state.selectedShadowId, view.mouse.x, view.mouse.y).ok;
+    const color = ok ? COLORS.ghostOk : COLORS.ghostBad;
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = d.color;
+    drawRoundRect(ctx, view.mouse.x - 15, view.mouse.y - 15, 30, 30, 7);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    drawCircle(ctx, view.mouse.x, view.mouse.y, d.attackRange); ctx.stroke();
+    ctx.setLineDash([]);
   }
 }
 
@@ -675,7 +1056,7 @@ const game = {
   canvas: null,
   ctx: null,
   ui: {},
-  view: { hoverSlot: null, showRanges: false },
+  view: { mouse: null, hoverRemnantUid: null, hoverBasicUid: null, showRanges: false, time: 0 },
   toastTimer: null,
   lastTime: null,
   accumulator: 0,
@@ -709,7 +1090,7 @@ function buildShadowCards() {
       `<span class="card-key">${i + 1}</span>` +
       `<span class="card-name">${s.name}</span>` +
       `<span class="card-role">${ROLE_TEXT[s.role] || s.role}</span>` +
-      `<span class="card-stats">HP ${s.maxHp} · ATK ${s.attack} · ${s.attackInterval}초</span>` +
+      `<span class="card-stats">HP ${s.maxHp} · ATK ${s.attack} · 사거리 ${s.attackRange}</span>` +
       `<span class="card-cost">에너지 ${s.cost}</span>`;
     btn.addEventListener('click', () => selectShadow(s.id));
     wrap.appendChild(btn);
@@ -718,33 +1099,32 @@ function buildShadowCards() {
 
 function selectShadow(id) {
   const st = game.state;
-  if (st.status !== STATUS.PREPARATION && st.status !== STATUS.PLAYING) return;
+  if (!isFieldActive(st)) return;
   st.selectedShadowId = st.selectedShadowId === id ? null : id;  // 같은 카드 다시 누르면 선택 해제
+  if (st.selectedShadowId) st.selectedRemnantUid = null;         // 카드 선택 시 추출 패널 닫기
+}
+
+function clearSelection() {
+  game.state.selectedShadowId = null;
+  game.state.selectedRemnantUid = null;
 }
 
 // 우클릭(또는 Mac Control + 클릭)
-//  - 배치된 그림자 위: 회수 시도
-//  - 그 밖의 곳: 카드 선택 해제
+//  - 기본 그림자 위: 회수 시도
+//  - 그 밖의 곳: 선택 해제
 function onSecondaryClick(evt) {
   evt.preventDefault();   // 브라우저 우클릭 메뉴가 뜨지 않도록
   if (evt.target === game.canvas) {
     const p = toFieldPos(evt);
-    const slot = getSlotAt(p.x, p.y);
-    if (slot && getSlotOccupant(game.state, slot.lane, slot.slotIndex)) {
-      tryRecall(slot);
+    const unit = getBasicAt(game.state, p.x, p.y);
+    if (unit) {
+      const result = recallShadow(game.state, unit);
+      if (result.ok) showToast(`${findShadowData(result.unit.typeId).name} 회수 (에너지 +${result.refund})`, 'ok');
+      else showToast(REASON_TEXT[result.reason] || result.reason, 'warn');
       return;
     }
   }
-  game.state.selectedShadowId = null;
-}
-
-function tryRecall(slot) {
-  const result = recallShadow(game.state, slot.lane, slot.slotIndex);
-  if (result.ok) {
-    showToast(`${findShadowData(result.unit.typeId).name} 회수 (에너지 +${result.refund})`, 'ok');
-  } else {
-    showToast(REASON_TEXT[result.reason] || result.reason, 'warn');
-  }
+  clearSelection();
 }
 
 function toFieldPos(evt) {
@@ -757,15 +1137,37 @@ function toFieldPos(evt) {
 
 function onCanvasClick(evt) {
   if (evt.ctrlKey) { onSecondaryClick(evt); return; }   // Mac Control + 클릭 = 우클릭
-  const p = toFieldPos(evt);
-  const slot = getSlotAt(p.x, p.y);
-  if (!slot) return;   // DAY 3: 잔영 클릭 처리 추가 예정
   const st = game.state;
-  const result = summonShadow(st, st.selectedShadowId, slot.lane, slot.slotIndex);
+  if (!isFieldActive(st)) return;
+  const p = toFieldPos(evt);
+
+  // 1순위: 잔영 클릭 → 추출 패널
+  const remnant = getRemnantAt(st, p.x, p.y);
+  if (remnant) {
+    st.selectedRemnantUid = remnant.uid;
+    st.selectedShadowId = null;
+    return;
+  }
+  // 2순위: 카드 선택 중이면 배치
+  if (st.selectedShadowId) {
+    const result = summonShadow(st, st.selectedShadowId, p.x, p.y);
+    if (result.ok) showToast(`${findShadowData(result.unit.typeId).name} 소환`, 'ok');
+    else showToast(REASON_TEXT[result.reason] || result.reason, 'warn');
+    return;
+  }
+  // 빈 곳 클릭: 추출 패널 닫기
+  st.selectedRemnantUid = null;
+}
+
+function onExtract() {
+  const st = game.state;
+  if (st.selectedRemnantUid === null) return;   // 연속 클릭 방지: 이미 처리된 경우 무시
+  const result = extractShadow(st, st.selectedRemnantUid);   // 버튼을 누른 순간 조건을 다시 검사
   if (result.ok) {
-    showToast(`${findShadowData(result.unit.typeId).name} 소환 (L${slot.lane + 1})`, 'ok');
+    showToast(`일어나라! ${findEnemyData(result.unit.sourceEnemyId).name} 그림자 추출`, 'ok');
   } else {
-    showToast(REASON_TEXT[result.reason] || result.reason, 'warn');
+    if (result.reason === 'EXTRACT_GONE') st.selectedRemnantUid = null;
+    showToast(REASON_TEXT[result.reason] || result.reason, 'warn');   // 에너지 부족 등: 잔영 유지
   }
 }
 
@@ -796,8 +1198,26 @@ function onKeyDown(evt) {
   if (evt.repeat) return;
   const key = evt.key.toLowerCase();
   if (key === 'd') { game.view.showRanges = !game.view.showRanges; return; }
+  if (key === 'escape') { clearSelection(); return; }
   const num = Number(evt.key);
   if (Number.isInteger(num) && num >= 1 && num <= GAME_DATA.shadows.length) selectShadow(GAME_DATA.shadows[num - 1].id);
+}
+
+function onMouseMove(evt) {
+  const p = toFieldPos(evt);
+  const st = game.state;
+  const remnant = isFieldActive(st) ? getRemnantAt(st, p.x, p.y) : null;
+  const basic = isFieldActive(st) ? getBasicAt(st, p.x, p.y) : null;
+  game.view.mouse = p;
+  game.view.hoverRemnantUid = remnant ? remnant.uid : null;
+  game.view.hoverBasicUid = basic ? basic.uid : null;
+  game.canvas.style.cursor = remnant ? 'pointer' : st.selectedShadowId ? 'crosshair' : 'default';
+}
+
+function onMouseLeave() {
+  game.view.mouse = null;
+  game.view.hoverRemnantUid = null;
+  game.view.hoverBasicUid = null;
 }
 
 function setText(el, text) { if (el.textContent !== text) el.textContent = text; }
@@ -805,46 +1225,80 @@ function setHidden(el, hidden) { if (el.classList.contains('hidden') !== hidden)
 
 function hintText(st) {
   switch (st.status) {
-    case STATUS.PREPARATION: return '카드를 고르고 빈 슬롯을 클릭해 배치하세요. 이번에 배치한 그림자는 우클릭으로 회수(전액 환불)할 수 있습니다.';
-    case STATUS.PLAYING: return '전투 중에도 배치할 수 있습니다. 처치 시 에너지 +' + GAME_DATA.config.killReward;
-    default: return '';
+    case STATUS.PREPARATION:
+      return `카드를 고르고 전장 빈 곳을 클릭해 기본 그림자를 배치하세요 (최대 ${GAME_DATA.config.maxBasic}기). 남은 잔영은 지금도 추출할 수 있습니다.`;
+    case STATUS.PLAYING:
+      return '적을 처치하면 그 자리에 잔영이 남습니다. 잔영을 클릭해 그림자를 추출하세요.';
+    default:
+      return '';
   }
+}
+
+// 규칙 쪽에서 쌓은 알림 처리
+function consumeEvents(st) {
+  for (const ev of st.events) {
+    if (ev === 'REMNANT_EXPIRED') showToast(REASON_TEXT.EXTRACT_GONE, 'warn');
+  }
+  st.events.length = 0;
+}
+
+function syncExtractPanel(st) {
+  const ui = game.ui;
+  const remnant = isFieldActive(st) ? findRemnant(st, st.selectedRemnantUid) : null;
+  setHidden(ui.extractPanel, !remnant);
+  if (!remnant) return;
+  const enemy = findEnemyData(remnant.sourceEnemyId);
+  const data = findExtractionData(remnant.sourceEnemyId);
+  setText(ui.extractName, `${enemy.name} 몬스터의 그림자`);
+  setText(ui.extractStats, `HP ${data.maxHp} · ATK ${data.attack} · 이동 속도 ${data.moveSpeed}`);
+  setText(ui.extractCost, `추출 비용: 에너지 ${data.cost}`);
+  setText(ui.extractTime, `잔여 시간: ${remnant.ttl.toFixed(1)}초${st.status === STATUS.PLAYING ? '' : ' (정지)'}`);
+  ui.btnExtract.classList.toggle('poor', !canExtract(st, remnant.uid).ok);
 }
 
 function syncUI() {
   const st = game.state;
   const ui = game.ui;
+  const C = GAME_DATA.config;
+  consumeEvents(st);
+
   setText(ui.wave, `${st.wave} / ${GAME_DATA.waves.length}`);
   setText(ui.energy, `${st.energy} / ${st.maxEnergy}`);
-  setText(ui.base, `${st.baseHp} / ${st.maxBaseHp}`);
+  setText(ui.core, `${st.coreHp} / ${st.maxCoreHp}`);
+  setText(ui.army, `${countArmy(st)} / ${C.maxArmy}`);
+  setText(ui.armyBasic, `기본 ${countBasic(st)}/${C.maxBasic}`);
   setText(ui.status, STATUS_TEXT[st.status]);
   setText(ui.hint, hintText(st));
-  ui.base.classList.toggle('danger', st.baseHp <= 3);
+  ui.core.classList.toggle('danger', st.coreHp <= 3);
 
+  const basicFull = countBasic(st) >= C.maxBasic || countArmy(st) >= C.maxArmy;
   for (const btn of ui.cards.children) {
     const d = findShadowData(btn.dataset.shadowId);
     btn.classList.toggle('selected', st.selectedShadowId === d.id);
-    btn.classList.toggle('poor', st.energy < d.cost);
+    btn.classList.toggle('poor', st.energy < d.cost || basicFull);
   }
 
   setHidden(ui.btnStart, st.status !== STATUS.PREPARATION);
   setText(ui.btnStart, `WAVE ${st.wave} 시작`);
 
+  syncExtractPanel(st);
+
   setHidden(ui.overlayTitle, st.status !== STATUS.READY);
   const showResult = st.status === STATUS.WAVE_CLEAR || st.status === STATUS.VICTORY || st.status === STATUS.DEFEAT;
   setHidden(ui.overlayResult, !showResult);
   if (showResult) {
+    const s = st.stats;
     if (st.status === STATUS.WAVE_CLEAR) {
       setText(ui.resultTitle, '웨이브 방어 성공');
-      setText(ui.resultDesc, `WAVE ${st.wave} 클리어 · 처치 ${st.stats.kills} · 기지 HP ${st.baseHp}/${st.maxBaseHp}`);
+      setText(ui.resultDesc, `WAVE ${st.wave} 클리어 · 처치 ${s.waveKills} · 군단 ${countArmy(st)}/${C.maxArmy} · 거점 HP ${st.coreHp}/${st.maxCoreHp}`);
       setText(ui.btnResultPrimary, '다음 웨이브 준비');
     } else if (st.status === STATUS.VICTORY) {
       setText(ui.resultTitle, '던전 방어 성공!');
-      setText(ui.resultDesc, `전 웨이브 클리어 · 처치 ${st.stats.kills} · 기지 HP ${st.baseHp}/${st.maxBaseHp}`);
+      setText(ui.resultDesc, `전 웨이브 클리어 · 총 처치 ${s.kills} · 추출 ${s.extractionSuccesses} · 거점 HP ${st.coreHp}/${st.maxCoreHp}`);
       setText(ui.btnResultPrimary, '다시 도전');
     } else {
       setText(ui.resultTitle, '던전 방어 실패');
-      setText(ui.resultDesc, `WAVE ${st.wave}에서 기지 파괴 · 처치 ${st.stats.kills}`);
+      setText(ui.resultDesc, `WAVE ${st.wave}에서 거점 파괴 · 총 처치 ${s.kills} · 추출 ${s.extractionSuccesses}`);
       setText(ui.btnResultPrimary, '다시 도전');
     }
     ui.overlayResult.dataset.kind = st.status.toLowerCase();
@@ -861,6 +1315,7 @@ function frame(now) {
   if (game.lastTime === null) game.lastTime = now;
   let delta = (now - game.lastTime) / 1000;
   game.lastTime = now;
+  game.view.time = now / 1000;
   if (delta > 0.25) delta = 0.25;   // 탭 전환 후 복귀 시 한꺼번에 몰아서 계산하지 않도록
 
   const step = GAME_DATA.config.fixedStep;
@@ -892,8 +1347,11 @@ function boot() {
   game.canvas = $('field');
   game.ctx = game.canvas.getContext('2d');
   game.ui = {
-    wave: $('hud-wave'), energy: $('hud-energy'), base: $('hud-base'), status: $('hud-status'),
+    wave: $('hud-wave'), energy: $('hud-energy'), core: $('hud-core'), army: $('hud-army'),
+    armyBasic: $('hud-army-basic'), status: $('hud-status'),
     hint: $('hint'), toast: $('toast'), cards: $('shadow-cards'), btnStart: $('btn-start-wave'),
+    extractPanel: $('extract-panel'), extractName: $('extract-name'), extractStats: $('extract-stats'),
+    extractCost: $('extract-cost'), extractTime: $('extract-time'), btnExtract: $('btn-extract'),
     overlayTitle: $('overlay-title'), overlayResult: $('overlay-result'),
     resultTitle: $('result-title'), resultDesc: $('result-desc'),
     btnResultPrimary: $('btn-result-primary'),
@@ -903,15 +1361,13 @@ function boot() {
   buildShadowCards();
 
   game.canvas.addEventListener('click', onCanvasClick);
-  game.canvas.addEventListener('mousemove', (evt) => {
-    const p = toFieldPos(evt);
-    game.view.hoverSlot = getSlotAt(p.x, p.y);
-    game.canvas.style.cursor = game.view.hoverSlot ? 'pointer' : 'default';
-  });
-  game.canvas.addEventListener('mouseleave', () => { game.view.hoverSlot = null; });
-  $('app').addEventListener('contextmenu', onSecondaryClick);   // 그림자 위: 회수 / 그 밖: 선택 해제
+  game.canvas.addEventListener('mousemove', onMouseMove);
+  game.canvas.addEventListener('mouseleave', onMouseLeave);
+  $('app').addEventListener('contextmenu', onSecondaryClick);   // 기본 그림자 위: 회수 / 그 밖: 선택 해제
   $('btn-play').addEventListener('click', newGame);
   game.ui.btnStart.addEventListener('click', onStartWave);
+  game.ui.btnExtract.addEventListener('click', onExtract);
+  $('btn-extract-cancel').addEventListener('click', () => { game.state.selectedRemnantUid = null; });
   game.ui.btnResultPrimary.addEventListener('click', onResultPrimary);
   $('btn-result-title').addEventListener('click', goToTitle);
   window.addEventListener('keydown', onKeyDown);
