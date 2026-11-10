@@ -1417,11 +1417,106 @@ const CLAW_FX = {
   pullX: 16,     // 공격한 쪽으로 당기는 거리(px)
 };
 
+// 잔영 (assets/sprites/remnant.png): 보랏빛 그림자 불꽃 6프레임 반복. 파일이 없으면 기존 원형으로 그림
+//  - 바닥 웅덩이를 쓰러진 적의 발밑에 맞춤. 클릭 판정(잔영 위치 반경 16px)은 그대로
+//  - 남은 시간은 웅덩이 둘레의 타원 호로 표시
+const REMNANT_FX = {
+  src: 'assets/sprites/remnant.png', w: 38, h: 41, fps: 6,
+  // 재생 순서: 원본 2~5번째 그림(칸 1~4)만 사용. 비슷한 1·6번째는 빼서 멈칫하는 느낌 없앰.
+  // 5번째에서 2번째로 건너뛰지 않도록 갔다가 되돌아오게 반복
+  sequence: [1, 2, 3, 4, 3, 2],
+  shade: 'rgba(10, 4, 26, 0.38)',   // 원본 위에 덮는 어두운 색 (밝기 낮추기)
+  groundY: 40,     // 칸 안에서 바닥선
+  baseY: 35,       // 칸 안에서 웅덩이 가운데 높이
+  feetDrop: 9,     // 잔영 위치에서 바닥선까지 아래로(px)
+  ring: { rx: 21, ry: 7 },
+};
+
+// 중앙 거점 오브젝트 (assets/sprites/core.png, 104×101 도트). 파일이 없으면 기존 원형으로 그림
+//  - 옆면 두께까지 포함한 전체 모양의 가운데를 거점 좌표(= 맵 중앙 문양)에 맞춤. 판정(반경 45)은 그대로
+//  - 돌 색은 맵 석상 얼굴 돌 색에 맞춘 그림 (푸른 빛은 원본 그대로)
+//  - 남은 HP는 별 문양 위 숫자로만 표시 (상단 HUD에도 표시됨)
+const CORE_SPRITE = {
+  src: 'assets/sprites/core.png', w: 104, h: 101,
+  anchorX: 52, anchorY: 50,            // 전체 모양 가운데 (칸 안 좌표)
+  starY: 44,                           // 윗면 별 문양 가운데 높이 → HP 숫자 위치
+};
+
+function drawCoreSprite(ctx, core, state, hpRatio) {
+  const C = CORE_SPRITE;
+  const k = ctx.getTransform().a;
+  const x = Math.round((core.x - C.anchorX) * k) / k;
+  const y = Math.round((core.y - C.anchorY) * k) / k;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(C.img, x, y);
+  const sy = core.y - C.anchorY + C.starY;   // 별 문양 가운데
+  ctx.restore();
+  const low = hpRatio <= 0.3;   // 30% 이하면 숫자를 붉게
+  ctx.lineWidth = 1;
+  drawLabel(ctx, `${state.coreHp} / ${state.maxCoreHp}`, core.x, sy + 1,
+    low ? COLORS.coreHpLow : COLORS.text, 'bold 12px Galmuri11, sans-serif');
+}
+
 function loadFxSheets() {
-  const img = new Image();
-  img.onload = () => { CLAW_FX.img = img; };
-  img.onerror = () => console.warn(`[이펙트 불러오기 실패] ${CLAW_FX.src}`);
-  img.src = CLAW_FX.src;
+  for (const fx of [CLAW_FX, REMNANT_FX, CORE_SPRITE]) {
+    const img = new Image();
+    img.onload = () => { fx.img = fx.shade ? buildTintedSheet(img, fx.shade) : img; };
+    img.onerror = () => console.warn(`[이펙트 불러오기 실패] ${fx.src}`);
+    img.src = fx.src;
+  }
+}
+
+function drawRemnantSprite(ctx, r, time, isSelected, isHover) {
+  const R = REMNANT_FX;
+  // 다음 프레임으로 서서히 겹쳐 바뀌게 해서 뚝뚝 끊기지 않도록. 잔영마다 박자를 어긋나게
+  const t = (time + r.uid * 0.29) * R.fps;
+  const i = Math.floor(t) % R.sequence.length;
+  const frame = R.sequence[i];
+  const next = R.sequence[(i + 1) % R.sequence.length];
+  const blend = t - Math.floor(t);
+  const k = ctx.getTransform().a;
+  const gx = Math.round(r.x * k) / k;
+  const gy = Math.round((r.y + R.feetDrop) * k) / k;   // 바닥선
+  const cy = gy - (R.groundY - R.baseY);                // 웅덩이 가운데
+  // 남은 시간: 웅덩이 둘레 타원 호 (12시 방향부터 시계 방향으로 줄어듦)
+  ctx.save();
+  ctx.strokeStyle = COLORS.remnantRing;
+  ctx.globalAlpha = 0.85;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.ellipse(gx, cy, R.ring.rx, R.ring.ry, 0, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (r.ttl / r.duration));
+  ctx.stroke();
+  ctx.restore();
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  const dx = gx - Math.floor(R.w / 2), dy = gy - R.groundY;
+  // 두 프레임을 작은 버퍼에 '더하기'로 섞으면 (지금×(1−b) + 다음×b) 겹친 부분이 옅어지지 않음
+  // → 그냥 반투명으로 겹칠 때 생기던 깜빡임 없이 부드럽게 바뀜
+  if (!R.buf) {
+    R.buf = document.createElement('canvas');
+    R.buf.width = R.w;
+    R.buf.height = R.h;
+  }
+  const b = R.buf.getContext('2d');
+  b.clearRect(0, 0, R.w, R.h);
+  b.globalCompositeOperation = 'lighter';
+  b.globalAlpha = 1 - blend;
+  b.drawImage(R.img, frame * R.w, 0, R.w, R.h, 0, 0, R.w, R.h);
+  b.globalAlpha = blend;
+  b.drawImage(R.img, next * R.w, 0, R.w, R.h, 0, 0, R.w, R.h);
+  b.globalAlpha = 1;
+  b.globalCompositeOperation = 'source-over';
+  ctx.drawImage(R.buf, dx, dy);
+  ctx.restore();
+  if (isSelected || isHover) {
+    ctx.strokeStyle = isSelected ? COLORS.selected : COLORS.remnantRing;
+    ctx.lineWidth = isSelected ? 2 : 1;
+    ctx.beginPath();
+    ctx.ellipse(gx, cy, R.ring.rx + 5, R.ring.ry + 3, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+  }
 }
 
 function drawClawFx(ctx, fx) {
@@ -1489,6 +1584,9 @@ function render(ctx, state, view) {
 
   // 중앙 거점 + HP 링
   const hpRatio = state.coreHp / state.maxCoreHp;
+  if (CORE_SPRITE.img) {
+    drawCoreSprite(ctx, core, state, hpRatio);
+  } else {
   ctx.save();
   ctx.shadowColor = COLORS.coreLine;
   ctx.shadowBlur = 18;
@@ -1507,6 +1605,7 @@ function render(ctx, state, view) {
   ctx.lineWidth = 1;
   drawLabel(ctx, '거점', core.x, core.y - 8, COLORS.coreLine, 'bold 14px sans-serif');
   drawLabel(ctx, `${state.coreHp} / ${state.maxCoreHp}`, core.x, core.y + 10, COLORS.text, '12px sans-serif');
+  }
 
   // 범위 표시 (D 키)
   if (view.showRanges) {
@@ -1536,9 +1635,10 @@ function render(ctx, state, view) {
 
   // 잔영
   for (const r of state.remnants) {
-    const pulse = 0.55 + 0.25 * Math.sin(view.time * 5 + r.uid);
     const isSelected = state.selectedRemnantUid === r.uid;
     const isHover = view.hoverRemnantUid === r.uid;
+    if (REMNANT_FX.img) { drawRemnantSprite(ctx, r, state.elapsed, isSelected, isHover); continue; }
+    const pulse = 0.55 + 0.25 * Math.sin(view.time * 5 + r.uid);
     ctx.globalAlpha = pulse;
     ctx.fillStyle = COLORS.remnant;
     drawCircle(ctx, r.x, r.y, 9); ctx.fill();
