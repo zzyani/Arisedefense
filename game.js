@@ -1018,8 +1018,13 @@ function drawCrackGlow(ctx, view) {
 
 // 맵 위쪽 석상의 두 눈(전장 좌표). 표시 전용
 const STATUE_EYES = [{ x: 455, y: 7 }, { x: 504, y: 7 }];
-// 눈빛 맥동(초): 서서히 밝아짐(rise) → 사그라듦(fall) → 잠시 원래 밝기로 쉼
+// 눈빛 맥동(초): 서서히 밝아짐(rise) → 사그라듦(fall) → 잠시 원래 밝기로 쉼.
+// 맥동 한 번마다 색이 바뀜: 푸른빛 → 붉은빛 → 푸른빛 → … 반복
 const EYE_PULSE = { period: 4.2, rise: 1.1, fall: 1.9 };
+const EYE_COLORS = [
+  { glow: [120, 200, 255], mid: [80, 160, 255],  core: [230, 248, 255], cover: null },          // 푸른빛
+  { glow: [255, 70, 60],   mid: [220, 30, 30],   core: [255, 150, 135], cover: [200, 25, 25] }, // 붉은빛
+];
 
 function easeInOut(u) { return 0.5 - 0.5 * Math.cos(Math.PI * Math.max(0, Math.min(1, u))); }
 
@@ -1031,26 +1036,37 @@ function eyePulse(t) {
   return 0;
 }
 
-// 석상 눈이 빛났다가 사그라드는 연출
+function rgba(c, alpha) { return `rgba(${c[0]},${c[1]},${c[2]},${Math.max(0, alpha).toFixed(3)})`; }
+
+// 석상 눈이 빛났다가 사그라드는 연출 (맥동마다 푸른빛 / 붉은빛 번갈아)
 function drawStatueEyes(ctx, time) {
   const a = eyePulse(time);
   if (a < 0.01) return;
+  const col = EYE_COLORS[Math.floor(time / EYE_PULSE.period) % EYE_COLORS.length];
   ctx.save();
-  ctx.globalCompositeOperation = 'lighter';
   for (const e of STATUE_EYES) {
+    // 붉은빛일 때는 맵에 그려진 하늘색 눈을 먼저 덮어서 붉게 보이도록 (일반 혼합)
+    if (col.cover) {
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = rgba(col.cover, 0.9 * a);
+      ctx.beginPath();
+      ctx.ellipse(e.x, e.y, 7, 2.6, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'lighter';
     // 가로로 긴 은은한 빛 번짐
     ctx.save();
     ctx.translate(e.x, e.y);
     ctx.scale(1.8, 1);
     const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, 14);
-    glow.addColorStop(0, `rgba(120,200,255,${(0.6 * a).toFixed(3)})`);
-    glow.addColorStop(0.5, `rgba(80,160,255,${(0.22 * a).toFixed(3)})`);
-    glow.addColorStop(1, 'rgba(80,160,255,0)');
+    glow.addColorStop(0, rgba(col.glow, 0.6 * a));
+    glow.addColorStop(0.5, rgba(col.mid, 0.22 * a));
+    glow.addColorStop(1, rgba(col.mid, 0));
     ctx.fillStyle = glow;
     ctx.fillRect(-14, -14, 28, 28);
     ctx.restore();
     // 눈동자 자리의 밝은 심
-    ctx.fillStyle = `rgba(230,248,255,${(0.85 * a).toFixed(3)})`;
+    ctx.fillStyle = rgba(col.core, 0.85 * a);
     ctx.beginPath();
     ctx.ellipse(e.x, e.y, 6, 1.8, 0, 0, Math.PI * 2);
     ctx.fill();

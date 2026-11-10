@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Arise:그림자군단 디펜스</title>
+  <!-- 픽셀 글꼴 Galmuri (SIL Open Font License). 불러오지 못하면 시스템 글꼴로 표시 -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/galmuri@2.40.3/dist/galmuri.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -25,8 +27,9 @@
       <div id="toast" class="toast"></div>
 
       <!-- 그림자 추출 패널: 잔영을 클릭하면 표시 -->
-      <div id="extract-panel" class="extract-panel hidden">
-        <p class="extract-eyebrow">그림자 추출</p>
+      <div id="extract-panel" class="extract-panel sys-window hidden">
+        <p class="sys-title">그림자 추출</p>
+        <div class="sys-divider"></div>
         <h3 id="extract-name"></h3>
         <p id="extract-stats" class="extract-line"></p>
         <p id="extract-cost" class="extract-cost"></p>
@@ -38,8 +41,9 @@
       </div>
 
       <!-- 그림자 상세 정보 / 해체 패널: 그림자를 클릭하면 표시 -->
-      <div id="unit-panel" class="extract-panel unit-panel hidden">
-        <p id="unit-kind" class="extract-eyebrow"></p>
+      <div id="unit-panel" class="extract-panel unit-panel sys-window hidden">
+        <p id="unit-kind" class="sys-title"></p>
+        <div class="sys-divider"></div>
         <h3 id="unit-name"></h3>
         <p id="unit-stats" class="extract-line"></p>
         <p id="unit-state" class="extract-line"></p>
@@ -64,10 +68,12 @@
 
     <!-- 타이틀 -->
     <div id="overlay-title" class="overlay">
-      <div class="panel">
+      <div class="panel sys-window">
+        <p class="sys-title">알림</p>
+        <div class="sys-divider"></div>
         <p class="eyebrow">나 혼자만 레벨업 IP 기반 비공식 팬 제작 포트폴리오</p>
         <h1>Arise:그림자군단 디펜스</h1>
-        <p class="desc">사방에서 몰려오는 5개의 웨이브로부터 중앙 거점을 지켜내세요.<br>적이 쓰러진 자리의 잔영에서 그림자를 추출해 군단을 키우세요.</p>
+        <p class="desc sys-msg">[사방에서 몰려오는 5개의 웨이브로부터 <em>중앙 거점</em>을 지켜내세요.<br>적이 쓰러진 자리의 잔영에서 <em>그림자</em>를 추출해 군단을 키우세요.]</p>
         <div class="overlay-buttons">
           <button id="btn-play" type="button" class="btn-primary">게임 시작</button>
         </div>
@@ -76,9 +82,11 @@
 
     <!-- 웨이브 완료 / 승리 / 패배 -->
     <div id="overlay-result" class="overlay hidden">
-      <div class="panel">
+      <div class="panel sys-window">
+        <p class="sys-title">알림</p>
+        <div class="sys-divider"></div>
         <h2 id="result-title"></h2>
-        <p id="result-desc" class="desc"></p>
+        <p id="result-desc" class="desc sys-msg"></p>
         <div class="overlay-buttons">
           <button id="btn-result-primary" type="button" class="btn-primary"></button>
           <button id="btn-result-title" type="button" class="btn-secondary">타이틀로</button>
