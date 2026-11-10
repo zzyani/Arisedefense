@@ -67,7 +67,7 @@ const GAME_DATA = {
   ],
 
   enemies: [
-    { id: 'EN_001', name: '일반형',   maxHp: 100, attack: 15, moveSpeed: 35, attackInterval: 2.0, attackRange: 45, baseDamage: 1, radius: 14, color: '#d99a3e' },
+    { id: 'EN_001', name: '일반형',   maxHp: 100, attack: 15, moveSpeed: 35, attackInterval: 2.0, attackRange: 45, baseDamage: 1, radius: 14, color: '#d99a3e', attackFx: 'claw' },
     { id: 'EN_002', name: '돌격형',   maxHp: 70,  attack: 12, moveSpeed: 65, attackInterval: 1.5, attackRange: 45, baseDamage: 1, radius: 12, color: '#ff5d73' },
     { id: 'EN_003', name: '중장갑형', maxHp: 260, attack: 30, moveSpeed: 20, attackInterval: 2.5, attackRange: 45, baseDamage: 2, radius: 18, color: '#b07a5a' },
   ],
@@ -661,7 +661,7 @@ function startWave(state) {
 }
 
 // WAVE_CLEAR → 다음 웨이브 PREPARATION
-// 추출 그림자는 HP 0 또는 게임 종료까지 유지. 남은 잔영은 준비 단계에서도 추출 가능(타이머는 전투 중에만 감소)
+// 추출 그림자는 HP 0 또는 게임 종료까지 유지. 잔영은 웨이브가 끝날 때 모두 사라지므로 준비 단계에는 없음
 function goToNextWave(state) {
   if (state.status !== STATUS.WAVE_CLEAR) return false;
   state.wave += 1;
@@ -845,7 +845,7 @@ function processShadowAttacks(state) {
     if (applyDamage(t, calcDamage(s.attack))) killed.push(t);   // 추출 그림자의 처치도 잔영 생성
     t.hitAt = state.elapsed;
     s.attackAt = state.elapsed;   // 공격 애니메이션용
-    addEffect(state, s.x, s.y, t.x, t.y, 'extracted');
+    addEffect(state, s.x, s.y, t.x, t.y, 'extracted', findEnemyData(s.sourceEnemyId).attackFx);
     s.cooldown = s.attackInterval;
   }
   return killed;
@@ -861,7 +861,7 @@ function processEnemyAttacks(state) {
     if (died && target.kind === 'extracted') addCorpse(state, target);   // 추출 그림자 사망 연출
     faceToward(e, target.x);
     e.attackAt = state.elapsed;   // 공격 애니메이션용
-    addEffect(state, e.x, e.y, target.x, target.y, 'enemy');
+    addEffect(state, e.x, e.y, target.x, target.y, 'enemy', findEnemyData(e.typeId).attackFx);
     e.cooldown = e.attackInterval;
   }
 }
@@ -903,12 +903,18 @@ function checkWaveComplete(state) {
   if (!wave) return;
   if (state.spawnIndex < wave.enemies.length || state.enemies.length > 0) return;
   const isLast = state.wave >= GAME_DATA.waves.length;
-  if (isLast) state.selectedRemnantUid = null;
+  // 웨이브가 끝나면 추출하지 않은 잔영은 모두 사라짐 → 준비 단계에는 잔영이 남지 않음
+  state.remnants = [];
+  state.selectedRemnantUid = null;
   setStatus(state, isLast ? STATUS.VICTORY : STATUS.WAVE_CLEAR);
 }
 
-function addEffect(state, x1, y1, x2, y2, kind) {
-  state.effects.push({ x1, y1, x2, y2, kind, ttl: 0.12 });
+// 공격 연출 (게임 규칙에 영향 없음). style: 없으면 공격 선, 'claw'면 할퀴기 자국
+const LINE_FX_TIME = 0.12;
+const CLAW_FX_TIME = 0.3;
+function addEffect(state, x1, y1, x2, y2, kind, style) {
+  const ttl = style === 'claw' ? CLAW_FX_TIME : LINE_FX_TIME;
+  state.effects.push({ x1, y1, x2, y2, kind, style, ttl, life: ttl });
 }
 
 function updateEffects(state, dt) {
@@ -1085,9 +1091,10 @@ const SPRITES = {
     scale: 1,         // 정수 배율만 사용해야 도트가 고르게 보임
     anchorX: 32,      // 칸 안에서 몸 가운데 x
     bodyTop: 16,      // 이동 줄에서 머리 끝 높이 (HP바 위치 계산용)
+    shadow: { w: 19, h: 3, dx: 1 },   // 발밑 그림자: 가로 반지름·세로 반지름·가운데 보정(px)
     anims: {
       idle:   { row: 0, frames: 4, fps: 3, groundY: 62 },                    // 멈춰 서 있을 때 (첫 시트의 서 있는 프레임)
-      attack: { row: 1, frames: 5, fps: 10, strikeFrame: 2, groundY: 60 },   // 0~1 웅크림, 2~3 덮침(타격), 4 복귀
+      attack: { row: 1, frames: 5, fps: 10, strikeFrame: 2, air: [2, 3], groundY: 60 },   // 0~1 웅크림, 2~3 덮침(타격, 공중), 4 복귀
       hit:    { row: 2, frames: 2, fps: 10, groundY: 60 },
       death:  { row: 3, frames: 5, fps: 9, groundY: 56 },
       // 이동 (다리가 번갈아 움직이는 달리기). stride: 한 바퀴(6프레임) 동안 나아가는 거리(px)
@@ -1099,6 +1106,13 @@ const SPRITES = {
 const SPRITE_FEET_OFFSET = 12;        // 유닛 중심(판정 위치)에서 발까지 아래로
 const EXTRACTED_SPRITE_SCALE = 1;     // 추출 그림자 배율 (정수 배율 유지)
 const EXTRACTED_TINT = 'rgba(38, 22, 88, 0.86)';   // 추출 그림자 색 (원본 위에 덮는 보랏빛)
+// 피격 연출: 맞은 순간 하얗게 번쩍였다가 사그라들고, 좌우로 짧게 흔들림 (그리기 전용, 판정과 무관)
+const HIT_FLASH_TIME = 0.16;   // 번쩍임 지속(초)
+const HIT_SHAKE_TIME = 0.22;   // 흔들림 지속(초)
+const HIT_SHAKE_PX = 2;        // 흔들림 최대 폭(px, 도트 1칸 = 1px)
+const HIT_SHAKE_HZ = 28;       // 흔들림 빠르기
+const GROUND_SHADOW = '#05030a';            // 적 발밑 그림자 색
+const GROUND_SHADOW_EXTRACTED = '#1a0838';  // 추출 그림자 발밑 그림자 색 (보랏빛)
 
 function spriteFor(typeId) {
   const cfg = SPRITES[typeId];
@@ -1156,7 +1170,44 @@ function pickAnim(unit, time, moving, cfg, engaged) {
   return { anim: name, frame: Math.floor(t * fps) % loop.frames, bob: 0 };
 }
 
-function drawSpriteFrame(ctx, cfg, tinted, animName, frame, x, y, facing, alpha, scaleMul, bob) {
+// 맞은 지 얼마나 됐는지로 번쩍임 세기(0~1)와 흔들림(px)을 계산. 게임 시간 기준이라 일시정지하면 같이 멈춤
+function hitFx(hitAt, time) {
+  if (hitAt === undefined) return null;
+  const t = time - hitAt;
+  if (t < 0 || t >= Math.max(HIT_FLASH_TIME, HIT_SHAKE_TIME)) return null;
+  const flash = t < HIT_FLASH_TIME ? 1 - t / HIT_FLASH_TIME : 0;
+  const decay = t < HIT_SHAKE_TIME ? 1 - t / HIT_SHAKE_TIME : 0;
+  // 도트가 번지지 않도록 1px 단위로 끊어서 흔듦
+  const shakeX = Math.round(Math.sin(t * HIT_SHAKE_HZ * Math.PI * 2) * HIT_SHAKE_PX * decay);
+  return { flash, shakeX };
+}
+
+// 발밑 그림자: 1px 단위 계단 모양 타원(도트 느낌). 바깥은 옅게, 안쪽은 진하게 두 겹
+//  - 공중 프레임(덮칠 때)에는 그림자가 작고 옅어져서 뛰어오른 느낌
+function drawGroundShadow(ctx, cfg, animName, frame, x, y, alpha, scaleMul, color) {
+  const sh = cfg.shadow;
+  if (!sh || alpha <= 0) return;
+  const a = cfg.anims[animName];
+  const air = a && a.air && a.air.includes(frame);
+  const k = (air ? 0.72 : 1) * cfg.scale * scaleMul;
+  const rx = sh.w * k;
+  const ry = Math.max(2, Math.round(sh.h * k));
+  const cx = Math.round(x + (sh.dx || 0) * scaleMul);
+  const cy = Math.round(spriteGroundY(y)) - 1;
+  ctx.save();
+  ctx.fillStyle = color;
+  for (const [scale, op] of [[1, 0.4], [0.66, 0.4]]) {   // [크기, 진하기]
+    ctx.globalAlpha = alpha * op * (air ? 0.7 : 1);
+    const rr = Math.max(1, Math.round(ry * scale));
+    for (let dy = -rr + 1; dy <= rr - 1; dy++) {
+      const half = Math.round(rx * scale * Math.sqrt(1 - (dy / rr) ** 2));
+      ctx.fillRect(cx - half, cy + dy, half * 2, 1);
+    }
+  }
+  ctx.restore();
+}
+
+function drawSpriteFrame(ctx, cfg, tinted, animName, frame, x, y, facing, alpha, scaleMul, bob, fx) {
   const img = tinted ? cfg.tinted : cfg.img;
   if (!img || alpha <= 0) return;
   const a = cfg.anims[animName];
@@ -1165,6 +1216,7 @@ function drawSpriteFrame(ctx, cfg, tinted, animName, frame, x, y, facing, alpha,
   const k = ctx.getTransform().a;
   const px = Math.round(x * k) / k;
   const py = Math.round((spriteGroundY(y) - (bob || 0)) * k) / k;
+  const sx = fx ? fx.shakeX : 0;
   ctx.save();
   ctx.imageSmoothingEnabled = false;   // 도트는 부드럽게 늘리지 않고 그대로
   ctx.globalAlpha = alpha;
@@ -1172,21 +1224,29 @@ function drawSpriteFrame(ctx, cfg, tinted, animName, frame, x, y, facing, alpha,
     ctx.shadowColor = COLORS.extractedLine;
     ctx.shadowBlur = 8;
   }
-  ctx.translate(px, py);
+  ctx.translate(px + sx, py);
   ctx.scale(facing * s, s);
-  ctx.drawImage(img, frame * cfg.cell, a.row * cfg.cell, cfg.cell, cfg.cell, -cfg.anchorX, -a.groundY, cfg.cell, cfg.cell);
+  const sxCell = frame * cfg.cell, syCell = a.row * cfg.cell;
+  ctx.drawImage(img, sxCell, syCell, cfg.cell, cfg.cell, -cfg.anchorX, -a.groundY, cfg.cell, cfg.cell);
+  // 피격 번쩍임: 같은 프레임의 흰 실루엣을 위에 덮고, 흰 빛을 살짝 번지게 함
+  if (fx && fx.flash > 0 && cfg.flash) {
+    ctx.globalAlpha = alpha * fx.flash * (tinted ? 0.75 : 0.9);
+    ctx.shadowColor = tinted ? 'rgba(200, 170, 255, 0.9)' : 'rgba(255, 240, 225, 0.9)';
+    ctx.shadowBlur = 10 * fx.flash;
+    ctx.drawImage(cfg.flash, sxCell, syCell, cfg.cell, cfg.cell, -cfg.anchorX, -a.groundY, cfg.cell, cfg.cell);
+  }
   ctx.restore();
 }
 
 // 원본 시트를 보랏빛 그림자로 물들인 사본 (픽셀을 읽지 않으므로 파일로 열어도 동작)
-function buildTintedSheet(img) {
+function buildTintedSheet(img, color = EXTRACTED_TINT) {
   const c = document.createElement('canvas');
   c.width = img.naturalWidth;
   c.height = img.naturalHeight;
   const x = c.getContext('2d');
   x.drawImage(img, 0, 0);
   x.globalCompositeOperation = 'source-atop';   // 그림이 있는 픽셀에만 색을 덮음
-  x.fillStyle = EXTRACTED_TINT;
+  x.fillStyle = color;
   x.fillRect(0, 0, c.width, c.height);
   return c;
 }
@@ -1197,6 +1257,7 @@ function loadSprites() {
     img.onload = () => {
       cfg.img = img;
       cfg.tinted = buildTintedSheet(img);
+      cfg.flash = buildTintedSheet(img, '#ffffff');   // 피격 번쩍임용 흰 실루엣
     };
     img.onerror = () => console.warn(`[스프라이트 불러오기 실패] ${id}: ${cfg.src}`);
     img.src = cfg.src;
@@ -1344,6 +1405,46 @@ function drawLabel(ctx, text, x, y, color, font) {
   ctx.fillText(text, x, y);
 }
 
+// 할퀴기 이펙트 (assets/sprites/fx_claw.png): 6프레임, 줄 0 붉은색(적 늑대) · 줄 1 보랏빛(추출 그림자 늑대)
+//  - 그림은 왼쪽에서 오른쪽으로 할퀴는 방향 → 공격한 쪽이 오른쪽이면 좌우 반전
+//  - 원본은 아래→위로 긋는 모양이라 위아래를 뒤집어 위→아래로 할퀴게 그림
+//  - 맞은 유닛 몸통 가운데에서 공격한 쪽으로 조금 당겨 붙임. 파일이 없으면 공격 선으로 대신 그림
+const CLAW_FX = {
+  src: 'assets/sprites/fx_claw.png', w: 48, h: 40, frames: 6,
+  rows: { enemy: 0, extracted: 1 },
+  glow: { enemy: 'rgba(255, 60, 70, 0.55)', extracted: 'rgba(160, 120, 255, 0.6)' },
+  bodyLift: 12,  // 판정 위치에서 몸통 가운데까지 위로(px)
+  pullX: 16,     // 공격한 쪽으로 당기는 거리(px)
+};
+
+function loadFxSheets() {
+  const img = new Image();
+  img.onload = () => { CLAW_FX.img = img; };
+  img.onerror = () => console.warn(`[이펙트 불러오기 실패] ${CLAW_FX.src}`);
+  img.src = CLAW_FX.src;
+}
+
+function drawClawFx(ctx, fx) {
+  if (!CLAW_FX.img) return false;
+  const p = Math.min(0.999, Math.max(0, 1 - fx.ttl / fx.life));
+  const frame = Math.floor(p * CLAW_FX.frames);
+  const row = CLAW_FX.rows[fx.kind] ?? 0;
+  const dir = fx.x2 >= fx.x1 ? 1 : -1;
+  const k = ctx.getTransform().a;   // 화면 픽셀에 맞춰 도트가 번지지 않게
+  const x = Math.round((fx.x2 - dir * CLAW_FX.pullX) * k) / k;
+  const y = Math.round((fx.y2 - CLAW_FX.bodyLift) * k) / k;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.shadowColor = CLAW_FX.glow[fx.kind] || CLAW_FX.glow.enemy;   // 어두운 바닥에서도 보이도록 옅은 빛
+  ctx.shadowBlur = 6;
+  ctx.translate(x, y);
+  ctx.scale(dir, -1);
+  ctx.drawImage(CLAW_FX.img, frame * CLAW_FX.w, row * CLAW_FX.h, CLAW_FX.w, CLAW_FX.h,
+    -CLAW_FX.w / 2, -CLAW_FX.h / 2, CLAW_FX.w, CLAW_FX.h);
+  ctx.restore();
+  return true;
+}
+
 function render(ctx, state, view) {
   const F = GAME_DATA.field;
   const core = F.core;
@@ -1486,8 +1587,11 @@ function render(ctx, state, view) {
     const frame = Math.min(anim.frames - 1, Math.floor(t * anim.fps));
     const fade = t < 0.6 ? 1 : Math.max(0, 1 - (t - 0.6) / (CORPSE_TIME - 0.6));
     const clipTop = c.extracted ? null : spawnClipTop(c.spawn);
+    const scaleMul = c.extracted ? EXTRACTED_SPRITE_SCALE : 1;
     withClip(ctx, clipTop, () => {
-      drawSpriteFrame(ctx, cfg, c.extracted, 'death', frame, c.x, c.y, c.facing, fade, c.extracted ? EXTRACTED_SPRITE_SCALE : 1);
+      drawGroundShadow(ctx, cfg, 'death', frame, c.x, c.y, fade, scaleMul, c.extracted ? GROUND_SHADOW_EXTRACTED : GROUND_SHADOW);
+      // 마지막 일격도 번쩍이고 흔들리도록 사망 시각을 피격 시각으로 사용
+      drawSpriteFrame(ctx, cfg, c.extracted, 'death', frame, c.x, c.y, c.facing, fade, scaleMul, 0, hitFx(c.diedAt, state.elapsed));
     });
   }
 
@@ -1500,7 +1604,8 @@ function render(ctx, state, view) {
     if (cfg) {   // 스프라이트가 있으면 적 그림을 보랏빛 그림자로 물들여서 그림
       const pick = pickAnim(s, state.elapsed, s.aiState === AI.CHASE || s.aiState === AI.RETURN, cfg, s.aiState === AI.ATTACK);
       const alpha = 0.35 + 0.65 * Math.max(0, Math.min(1, spawnRatio));
-      drawSpriteFrame(ctx, cfg, true, pick.anim, pick.frame, s.x, s.y, s.facing || 1, alpha, EXTRACTED_SPRITE_SCALE, pick.bob);
+      drawGroundShadow(ctx, cfg, pick.anim, pick.frame, s.x, s.y, alpha, EXTRACTED_SPRITE_SCALE, GROUND_SHADOW_EXTRACTED);
+      drawSpriteFrame(ctx, cfg, true, pick.anim, pick.frame, s.x, s.y, s.facing || 1, alpha, EXTRACTED_SPRITE_SCALE, pick.bob, hitFx(s.hitAt, state.elapsed));
       if (state.selectedUnitUid === s.uid || view.hoverUnitUid === s.uid) {
         ctx.strokeStyle = state.selectedUnitUid === s.uid ? COLORS.selected : COLORS.remnantRing;
         ctx.lineWidth = state.selectedUnitUid === s.uid ? 2 : 1;
@@ -1542,7 +1647,8 @@ function render(ctx, state, view) {
     if (cfg) {   // 스프라이트: 이동·공격·피격 애니메이션
       const pick = pickAnim(e, state.elapsed, e.moving, cfg, !e.moving);
       withClip(ctx, clipTop, () => {
-        drawSpriteFrame(ctx, cfg, false, pick.anim, pick.frame, e.x, e.y, e.facing || 1, 1, 1, pick.bob);
+        drawGroundShadow(ctx, cfg, pick.anim, pick.frame, e.x, e.y, 1, 1, GROUND_SHADOW);
+        drawSpriteFrame(ctx, cfg, false, pick.anim, pick.frame, e.x, e.y, e.facing || 1, 1, 1, pick.bob, hitFx(e.hitAt, state.elapsed));
         drawHpBar(ctx, e.x, spriteTopY(cfg, e.y, 1) - 6, 30, e.hp / e.maxHp, COLORS.hpEnemy);
       });
       continue;
@@ -1564,10 +1670,14 @@ function render(ctx, state, view) {
     if (clipTop !== null) ctx.restore();
   }
 
-  // 공격 선
+  // 공격 선 / 할퀴기 자국
   for (const fx of state.effects) {
+    if (fx.style === 'claw') {
+      if (drawClawFx(ctx, fx)) continue;
+      if (fx.ttl < fx.life - LINE_FX_TIME) continue;   // 이펙트 파일이 없으면 처음 잠깐만 공격 선
+    }
     ctx.strokeStyle = fx.kind === 'shadow' ? COLORS.fxShadow : fx.kind === 'extracted' ? COLORS.fxExtracted : COLORS.fxEnemy;
-    ctx.globalAlpha = Math.max(0, fx.ttl / 0.12);
+    ctx.globalAlpha = Math.max(0, (fx.ttl - fx.life + LINE_FX_TIME) / LINE_FX_TIME);
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(fx.x1, fx.y1);
@@ -2055,6 +2165,7 @@ function boot() {
   mapImage.onerror = () => console.warn(`[맵 이미지 불러오기 실패] ${MAP_IMAGE_SRC}`);
   mapImage.src = MAP_IMAGE_SRC;
   loadSprites();   // 캐릭터 스프라이트 (불러오기 전·실패 시에는 원형으로 그림)
+  loadFxSheets();  // 공격 이펙트 (불러오기 전·실패 시에는 공격 선)
 
   game.canvas.addEventListener('click', onCanvasClick);
   game.canvas.addEventListener('mousemove', onMouseMove);
