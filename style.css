@@ -47,7 +47,7 @@ button { font-family: inherit; }
 #app {
   position: relative;
   width: 100%;
-  max-width: 1000px;
+  max-width: 1008px;   /* 전장 캔버스가 정확히 960px(테두리 제외)로 보이도록 → 도트가 고르게 2배 */
   background: var(--panel);
   padding: 16px 20px 12px;
   border: var(--px) solid var(--line);
@@ -437,6 +437,58 @@ button { font-family: inherit; }
 .btn-primary:active, .btn-danger:active, .btn-secondary:active { transform: translateY(1px); }
 
 #btn-start-wave { min-width: 160px; font-family: var(--font-head); font-size: 14px; }
+
+/* 일시정지 버튼: 웨이브 시작 버튼 자리에 표시, 앞에 픽셀 ‖ 아이콘 */
+.btn-pause {
+  min-width: 160px;
+  gap: 8px;
+  font-family: var(--font-head);
+  font-size: 14px;
+  color: var(--accent-2);
+  border-color: var(--line-hi);
+}
+
+.btn-pause::before {
+  content: "";
+  width: 10px;
+  height: 12px;
+  border-left: 4px solid currentColor;
+  border-right: 4px solid currentColor;
+  box-sizing: border-box;
+}
+
+.kbd {
+  padding: 0 4px;
+  font-family: var(--font);
+  font-size: 11px;
+  color: var(--sub);
+  border: 1px solid var(--line);
+}
+
+/* 일시정지 창 */
+.pause-title {
+  color: var(--accent-2);
+  letter-spacing: 4px;
+  text-shadow: 0 0 10px var(--glow);
+  animation: pause-blink 1.2s steps(2, jump-none) infinite;   /* 픽셀 게임처럼 딱딱 끊기는 깜빡임 */
+}
+
+@keyframes pause-blink {
+  from { opacity: 1; }
+  to   { opacity: 0.45; }
+}
+
+.pause-stats {
+  margin: -12px 0 22px;
+  font-size: 11px;
+  color: var(--sub);
+}
+
+.pause-keys {
+  margin: 16px 0 0;
+  font-size: 11px;
+  color: var(--sub);
+}
 
 .keys {
   margin: 10px 2px 0;

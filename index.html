@@ -63,8 +63,9 @@
     <footer id="controls">
       <div id="shadow-cards"></div>
       <button id="btn-start-wave" type="button" class="btn-primary hidden">WAVE 1 시작</button>
+      <button id="btn-pause" type="button" class="btn-secondary btn-pause hidden">일시정지 <span class="kbd">P</span></button>
     </footer>
-    <p class="keys">1·2·3 기본 그림자 선택 · 좌클릭 배치 · 잔영 클릭 → 추출 · 그림자 클릭 → 해체 · 기본 그림자 우클릭 회수(준비 단계) · Esc/우클릭 선택 해제 · D 범위 표시</p>
+    <p class="keys">1·2·3 기본 그림자 선택 · 좌클릭 배치 · 잔영 클릭 → 추출 · 그림자 클릭 → 해체 · 기본 그림자 우클릭 회수(준비 단계) · Esc/우클릭 선택 해제 · P/Esc 일시정지 · D 범위 표시</p>
 
     <!-- 타이틀 -->
     <div id="overlay-title" class="overlay">
@@ -77,6 +78,23 @@
         <div class="overlay-buttons">
           <button id="btn-play" type="button" class="btn-primary">게임 시작</button>
         </div>
+      </div>
+    </div>
+
+    <!-- 일시정지 -->
+    <div id="overlay-pause" class="overlay hidden">
+      <div class="panel sys-window">
+        <p class="sys-title">알림</p>
+        <div class="sys-divider"></div>
+        <h2 class="pause-title">일시정지</h2>
+        <p class="desc sys-msg">[전투가 멈췄습니다. <em>적·그림자·잔영 시간</em>이 모두 정지 상태입니다.]</p>
+        <p id="pause-stats" class="pause-stats"></p>
+        <div class="overlay-buttons">
+          <button id="btn-resume" type="button" class="btn-primary">계속하기</button>
+          <button id="btn-pause-restart" type="button" class="btn-secondary">다시 시작</button>
+          <button id="btn-pause-title" type="button" class="btn-secondary">타이틀로</button>
+        </div>
+        <p class="pause-keys">P 또는 Esc 를 눌러 계속하기</p>
       </div>
     </div>
 

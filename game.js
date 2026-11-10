@@ -129,7 +129,7 @@ const STATUS = Object.freeze({
   READY: 'READY',             // 타이틀 화면
   PREPARATION: 'PREPARATION', // 병력 배치 (전투 정지)
   PLAYING: 'PLAYING',         // 전투 진행
-  PAUSED: 'PAUSED',           // 일시정지 (다음 작업)
+  PAUSED: 'PAUSED',           // 일시정지 (전투 중 P/Esc, 탭 전환 시 자동)
   WAVE_CLEAR: 'WAVE_CLEAR',   // 웨이브 종료 처리
   VICTORY: 'VICTORY',
   DEFEAT: 'DEFEAT',
@@ -196,6 +196,7 @@ function createInitialState() {
     enemies: [],
     remnants: [],
     effects: [],              // 공격 선 표시 (연출용, 게임 규칙에 영향 없음)
+    corpses: [],              // 사망 애니메이션 표시 (연출용)
     events: [],               // 규칙 → UI 알림 (예: 선택한 잔영 만료). UI가 매 프레임 비움
     spawnIndex: 0,
     spawnTimer: 0,
@@ -441,8 +442,10 @@ function getShadowAt(state, x, y) {
   let bestDist = Infinity;
   for (const s of state.extractedUnits) {
     if (!s.alive) continue;
-    const d = dist(x, y, s.x, s.y);
-    if (d <= 16 && d < bestDist) { best = s; bestDist = d; }
+    // 스프라이트로 그리는 그림자는 몸이 판정 위치보다 위로 그려지므로 클릭 범위도 맞춰 넓힘
+    const sprite = typeof SPRITES !== 'undefined' && SPRITES[s.sourceEnemyId] && SPRITES[s.sourceEnemyId].img;
+    const d = dist(x, y, s.x, sprite ? s.y - 10 : s.y);
+    if (d <= (sprite ? 24 : 16) && d < bestDist) { best = s; bestDist = d; }
   }
   return best;
 }
@@ -662,7 +665,22 @@ function startWave(state) {
 function goToNextWave(state) {
   if (state.status !== STATUS.WAVE_CLEAR) return false;
   state.wave += 1;
+  state.corpses = [];
   return setStatus(state, STATUS.PREPARATION);
+}
+
+/* ---------- 일시정지 ----------
+ * 전투 중(PLAYING)에만 멈출 수 있음. 멈춘 동안 updateGame이 아무것도 하지 않으므로
+ * 적·그림자 이동, 공격, 쿨타임, 적 생성, 잔영 타이머가 모두 정지한다.
+ * 소환·추출·해체도 isFieldActive가 false라 막힘. */
+function pauseGame(state) {
+  if (state.status !== STATUS.PLAYING) return false;
+  return setStatus(state, STATUS.PAUSED);
+}
+
+function resumeGame(state) {
+  if (state.status !== STATUS.PAUSED) return false;
+  return setStatus(state, STATUS.PLAYING);
 }
 
 
@@ -695,6 +713,7 @@ function updateGame(state, dt) {
     state.stats.waveKills += 1;
     addEnergy(state, GAME_DATA.config.killReward);
     if (Math.random() < GAME_DATA.extraction.remnantChance) createRemnant(state, enemy);
+    addCorpse(state, enemy);
   }
   cleanupDead(state);                     // 8. 사망 객체 일괄 제거
   updateEffects(state, dt);
@@ -730,6 +749,7 @@ function updateEnemyMovement(state, dt) {
     if (!e.alive) continue;
     e.moving = !findEnemyTarget(state, e);   // 사거리 안에 그림자가 있으면 멈추고 공격
     if (!e.moving) continue;
+    faceToward(e, core.x);
     moveToward(e, core.x, core.y, e.moveSpeed * dt, 0);
     if (dist(e.x, e.y, core.x, core.y) <= core.radius + e.radius) {
       e.alive = false;                // 처치가 아니므로 보상·잔영 없음
@@ -758,6 +778,7 @@ function updateExtractedAI(state, dt) {
     s.targetId = target ? target.uid : null;
 
     if (target) {
+      faceToward(s, target.x);
       if (dist(s.x, s.y, target.x, target.y) <= s.attackRange) {
         s.aiState = AI.ATTACK;
         continue;
@@ -774,6 +795,7 @@ function updateExtractedAI(state, dt) {
     const fromOrigin = dist(s.x, s.y, s.originX, s.originY);
     if (s.aiState === AI.RETURN || fromOrigin > ex.returnThreshold) {
       s.aiState = AI.RETURN;
+      faceToward(s, s.originX);
       moveAroundCore(s, s.originX, s.originY, s.moveSpeed * dt, 0);
       if (dist(s.x, s.y, s.originX, s.originY) < 0.5) {
         s.x = s.originX;
@@ -809,8 +831,10 @@ function processShadowAttacks(state) {
     const dmg = calcDamage(u.attack);
     for (const t of targets) {
       if (applyDamage(t, dmg)) killed.push(t);
+      t.hitAt = state.elapsed;   // 피격 애니메이션용
       addEffect(state, u.x, u.y, t.x, t.y, 'shadow');
     }
+    u.attackAt = state.elapsed;
     u.cooldown = u.attackInterval;
   }
   // 추출 그림자: ATTACK 상태일 때 추격 대상 공격
@@ -819,6 +843,8 @@ function processShadowAttacks(state) {
     const t = state.enemies.find((e) => e.uid === s.targetId);
     if (!t || !t.alive || dist(s.x, s.y, t.x, t.y) > s.attackRange) continue;
     if (applyDamage(t, calcDamage(s.attack))) killed.push(t);   // 추출 그림자의 처치도 잔영 생성
+    t.hitAt = state.elapsed;
+    s.attackAt = state.elapsed;   // 공격 애니메이션용
     addEffect(state, s.x, s.y, t.x, t.y, 'extracted');
     s.cooldown = s.attackInterval;
   }
@@ -830,10 +856,35 @@ function processEnemyAttacks(state) {
     if (!e.alive || e.cooldown > 0) continue;
     const target = findEnemyTarget(state, e);   // 매번 다시 찾음 → 이미 죽은 그림자 공격 방지
     if (!target) continue;
-    applyDamage(target, calcDamage(e.attack));
+    const died = applyDamage(target, calcDamage(e.attack));
+    target.hitAt = state.elapsed;
+    if (died && target.kind === 'extracted') addCorpse(state, target);   // 추출 그림자 사망 연출
+    faceToward(e, target.x);
+    e.attackAt = state.elapsed;   // 공격 애니메이션용
     addEffect(state, e.x, e.y, target.x, target.y, 'enemy');
     e.cooldown = e.attackInterval;
   }
+}
+
+/* ---------- 애니메이션용 표시 정보 (게임 규칙에는 영향 없음) ---------- */
+const CORPSE_TIME = 1.0;   // 사망 애니메이션 표시 시간(초)
+
+// 바라보는 방향: 1 = 오른쪽, -1 = 왼쪽 (스프라이트 좌우 반전용)
+function faceToward(unit, tx) {
+  const dx = tx - unit.x;
+  if (Math.abs(dx) > 0.5) unit.facing = dx < 0 ? -1 : 1;
+}
+
+function addCorpse(state, unit) {
+  state.corpses.push({
+    typeId: unit.kind === 'extracted' ? unit.sourceEnemyId : unit.typeId,
+    extracted: unit.kind === 'extracted',
+    x: unit.x,
+    y: unit.y,
+    facing: unit.facing || 1,
+    spawn: unit.spawn,
+    diedAt: state.elapsed,
+  });
 }
 
 function cleanupDead(state) {
@@ -863,6 +914,7 @@ function addEffect(state, x1, y1, x2, y2, kind) {
 function updateEffects(state, dt) {
   for (const fx of state.effects) fx.ttl -= dt;
   state.effects = state.effects.filter((fx) => fx.ttl > 0);
+  state.corpses = state.corpses.filter((c) => state.elapsed - c.diedAt < CORPSE_TIME);
 }
 
 
@@ -966,20 +1018,25 @@ const MAP_FLAMES = [
  * 밝은 하늘색 균열만 남는다. 픽셀을 직접 읽지 않으므로 파일로 열어도(file://) 동작한다.
  * 이 '균열만 남은 이미지'를 출현 지점 영역에서만 빛처럼 더해서 그린다. */
 const CRACK_BLUR_SCALE = 5;   // 작게 줄였다 늘려서 번지는 빛을 만듦
+const CRACK_RES = 2;          // 균열 선은 2배 해상도로 만들어 고해상도 화면에서도 또렷하게
 
 function buildCrackGlow(img) {
   const F = GAME_DATA.field;
+  const W = F.width * CRACK_RES;
+  const H = F.height * CRACK_RES;
   const sharp = document.createElement('canvas');
-  sharp.width = F.width;
-  sharp.height = F.height;
+  sharp.width = W;
+  sharp.height = H;
   const c = sharp.getContext('2d');
-  c.drawImage(img, 0, 0, F.width, F.height);
+  c.drawImage(img, 0, 0, W, H);
   c.globalCompositeOperation = 'multiply';
-  for (let i = 0; i < 3; i++) c.drawImage(img, 0, 0, F.width, F.height);   // 밝기^4 → 균열만 남음
+  for (let i = 0; i < 3; i++) c.drawImage(img, 0, 0, W, H);   // 밝기^4 → 균열만 남음
   // 출현 지점 균열 영역만 남기고 나머지는 지움
   c.globalCompositeOperation = 'destination-in';
   c.beginPath();
-  for (const sp of F.spawnPoints) if (sp.crack) c.rect(sp.crack.x, sp.crack.y, sp.crack.w, sp.crack.h);
+  for (const sp of F.spawnPoints) {
+    if (sp.crack) c.rect(sp.crack.x * CRACK_RES, sp.crack.y * CRACK_RES, sp.crack.w * CRACK_RES, sp.crack.h * CRACK_RES);
+  }
   c.fillStyle = '#fff';
   c.fill();
 
@@ -1011,9 +1068,139 @@ function drawCrackGlow(ctx, view) {
     ctx.drawImage(glow.soft, r.x / k, r.y / k, r.w / k, r.h / k, r.x, r.y, r.w, r.h);
     // 균열 선 자체
     ctx.globalAlpha = a * 0.8;
-    ctx.drawImage(glow.sharp, r.x, r.y, r.w, r.h, r.x, r.y, r.w, r.h);
+    const q = CRACK_RES;
+    ctx.drawImage(glow.sharp, r.x * q, r.y * q, r.w * q, r.h * q, r.x, r.y, r.w, r.h);
   });
   ctx.restore();
+}
+
+/* ---------- 캐릭터 스프라이트 ----------
+ * 시트 규칙: 칸 크기 cell×cell, 한 줄 = 동작 하나, 왼쪽→오른쪽 = 프레임, 캐릭터는 오른쪽을 봄(왼쪽은 좌우 반전).
+ * groundY: 그 줄에서 발이 닿는 높이(칸 기준). 줄마다 발 높이가 달라도 같은 땅 위에 서도록 맞춤.
+ * 스프라이트가 없는 적은 기존 원형으로 그림. 게임 판정(위치·충돌)은 그대로이고 그리기만 바뀜. */
+const SPRITES = {
+  EN_001: {   // 일반형
+    src: 'assets/sprites/en_001.png',
+    cell: 64,         // 도트 1칸 = 전장 1px (고해상도 화면에서는 2×2 화면 픽셀) → 또렷한 도트
+    scale: 1,         // 정수 배율만 사용해야 도트가 고르게 보임
+    anchorX: 32,      // 칸 안에서 몸 가운데 x
+    bodyTop: 16,      // 이동 줄에서 머리 끝 높이 (HP바 위치 계산용)
+    anims: {
+      idle:   { row: 0, frames: 4, fps: 3, groundY: 62 },                    // 멈춰 서 있을 때 (첫 시트의 서 있는 프레임)
+      attack: { row: 1, frames: 5, fps: 10, strikeFrame: 2, groundY: 60 },   // 0~1 웅크림, 2~3 덮침(타격), 4 복귀
+      hit:    { row: 2, frames: 2, fps: 10, groundY: 60 },
+      death:  { row: 3, frames: 5, fps: 9, groundY: 56 },
+      // 이동 (다리가 번갈아 움직이는 달리기). stride: 한 바퀴(6프레임) 동안 나아가는 거리(px)
+      //  → 재생 속도 = 프레임 수 × 이동 속도 ÷ stride. 빠른 유닛일수록 다리도 빨라져 발이 미끄러지지 않음
+      walk:   { row: 4, frames: 6, fps: 10, stride: 36, groundY: 62 },
+    },
+  },
+};
+const SPRITE_FEET_OFFSET = 12;        // 유닛 중심(판정 위치)에서 발까지 아래로
+const EXTRACTED_SPRITE_SCALE = 1;     // 추출 그림자 배율 (정수 배율 유지)
+const EXTRACTED_TINT = 'rgba(38, 22, 88, 0.86)';   // 추출 그림자 색 (원본 위에 덮는 보랏빛)
+
+function spriteFor(typeId) {
+  const cfg = SPRITES[typeId];
+  return cfg && cfg.img ? cfg : null;
+}
+
+function spriteGroundY(y) { return y + SPRITE_FEET_OFFSET; }
+
+function spriteTopY(cfg, y, scaleMul) {
+  return spriteGroundY(y) - (cfg.anims.walk.groundY - cfg.bodyTop) * cfg.scale * scaleMul;
+}
+
+function spawnClipTop(spawn) {
+  const sp = GAME_DATA.field.spawnPoints[spawn];
+  return sp && sp.revealTop !== undefined ? sp.revealTop : null;
+}
+
+function withClip(ctx, clipTop, draw) {
+  if (clipTop === null) { draw(); return; }
+  const F = GAME_DATA.field;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, clipTop, F.width, F.height - clipTop);
+  ctx.clip();
+  draw();
+  ctx.restore();
+}
+
+// 지금 보여줄 동작과 프레임. 시간은 게임 시간(state.elapsed)이라 일시정지하면 애니메이션도 멈춤
+//  - 공격 순간(attackAt)부터 타격 프레임 이후를 재생 → 공격 선과 덮치는 동작이 맞음
+//  - 공격 직전(쿨타임이 거의 끝남)에는 웅크리는 프레임
+//  - 피격(hitAt) 직후 짧게 피격 프레임, 그 외에는 움직이면 이동, 멈춰 있으면 대기
+function pickAnim(unit, time, moving, cfg, engaged) {
+  const atk = cfg.anims.attack;
+  if (unit.attackAt !== undefined) {
+    const t = time - unit.attackAt;
+    if (t >= 0 && t < (atk.frames - atk.strikeFrame) / atk.fps) {
+      return { anim: 'attack', frame: atk.strikeFrame + Math.floor(t * atk.fps) };
+    }
+  }
+  if (unit.hitAt !== undefined) {
+    const hit = cfg.anims.hit;
+    const t = time - unit.hitAt;
+    if (t >= 0 && t < hit.frames / hit.fps) return { anim: 'hit', frame: Math.floor(t * hit.fps) };
+  }
+  const windup = atk.strikeFrame / atk.fps;
+  if (engaged && unit.cooldown > 0 && unit.cooldown <= windup) {
+    const f = Math.floor((windup - unit.cooldown) * atk.fps);
+    return { anim: 'attack', frame: Math.max(0, Math.min(atk.strikeFrame - 1, f)) };
+  }
+  const name = moving ? 'walk' : 'idle';
+  const loop = cfg.anims[name];
+  const t = time + unit.uid * 0.37;   // 유닛마다 박자를 어긋나게 해서 똑같이 움직이지 않도록
+  const fps = loop.stride && unit.moveSpeed ? loop.frames * unit.moveSpeed / loop.stride : loop.fps;
+  return { anim: name, frame: Math.floor(t * fps) % loop.frames, bob: 0 };
+}
+
+function drawSpriteFrame(ctx, cfg, tinted, animName, frame, x, y, facing, alpha, scaleMul, bob) {
+  const img = tinted ? cfg.tinted : cfg.img;
+  if (!img || alpha <= 0) return;
+  const a = cfg.anims[animName];
+  const s = cfg.scale * scaleMul;
+  // 화면 픽셀 단위로 위치를 맞춰야 도트가 번지지 않음
+  const k = ctx.getTransform().a;
+  const px = Math.round(x * k) / k;
+  const py = Math.round((spriteGroundY(y) - (bob || 0)) * k) / k;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;   // 도트는 부드럽게 늘리지 않고 그대로
+  ctx.globalAlpha = alpha;
+  if (tinted) {   // 추출 그림자: 보랏빛 윤곽 빛
+    ctx.shadowColor = COLORS.extractedLine;
+    ctx.shadowBlur = 8;
+  }
+  ctx.translate(px, py);
+  ctx.scale(facing * s, s);
+  ctx.drawImage(img, frame * cfg.cell, a.row * cfg.cell, cfg.cell, cfg.cell, -cfg.anchorX, -a.groundY, cfg.cell, cfg.cell);
+  ctx.restore();
+}
+
+// 원본 시트를 보랏빛 그림자로 물들인 사본 (픽셀을 읽지 않으므로 파일로 열어도 동작)
+function buildTintedSheet(img) {
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth;
+  c.height = img.naturalHeight;
+  const x = c.getContext('2d');
+  x.drawImage(img, 0, 0);
+  x.globalCompositeOperation = 'source-atop';   // 그림이 있는 픽셀에만 색을 덮음
+  x.fillStyle = EXTRACTED_TINT;
+  x.fillRect(0, 0, c.width, c.height);
+  return c;
+}
+
+function loadSprites() {
+  for (const [id, cfg] of Object.entries(SPRITES)) {
+    const img = new Image();
+    img.onload = () => {
+      cfg.img = img;
+      cfg.tinted = buildTintedSheet(img);
+    };
+    img.onerror = () => console.warn(`[스프라이트 불러오기 실패] ${id}: ${cfg.src}`);
+    img.src = cfg.src;
+  }
 }
 
 // 맵 위쪽 석상의 두 눈(전장 좌표). 표시 전용
@@ -1161,6 +1348,8 @@ function render(ctx, state, view) {
   const F = GAME_DATA.field;
   const core = F.core;
   const placing = !!state.selectedShadowId && isFieldActive(state);
+  // 캔버스 실제 해상도(고해상도 화면이면 2배)와 상관없이 항상 전장 좌표(960×588)로 그림
+  ctx.setTransform(ctx.canvas.width / F.width, 0, 0, ctx.canvas.height / F.height, 0, 0);
 
   if (view.mapImage) {
     // 맵 디자인 이미지를 전장 크기에 맞춰 그림 (판정 좌표와는 별개)
@@ -1288,11 +1477,41 @@ function render(ctx, state, view) {
     drawHpBar(ctx, u.x, u.y - 24, 34, u.hp / u.maxHp, COLORS.hpShadow);
   }
 
+  // 사망 애니메이션 (적·추출 그림자). 북쪽 출현 적은 출현 연출과 같은 선 아래만 그림
+  for (const c of state.corpses) {
+    const cfg = spriteFor(c.typeId);
+    if (!cfg) continue;
+    const t = state.elapsed - c.diedAt;
+    const anim = cfg.anims.death;
+    const frame = Math.min(anim.frames - 1, Math.floor(t * anim.fps));
+    const fade = t < 0.6 ? 1 : Math.max(0, 1 - (t - 0.6) / (CORPSE_TIME - 0.6));
+    const clipTop = c.extracted ? null : spawnClipTop(c.spawn);
+    withClip(ctx, clipTop, () => {
+      drawSpriteFrame(ctx, cfg, c.extracted, 'death', frame, c.x, c.y, c.facing, fade, c.extracted ? EXTRACTED_SPRITE_SCALE : 1);
+    });
+  }
+
   // 추출 그림자
   for (const s of state.extractedUnits) {
     const src = findEnemyData(s.sourceEnemyId);
     const r = s.radius;
     const spawnRatio = s.aiState === AI.SPAWN ? 1 - s.spawnTimer / GAME_DATA.extraction.spawnDelay : 1;
+    const cfg = spriteFor(s.sourceEnemyId);
+    if (cfg) {   // 스프라이트가 있으면 적 그림을 보랏빛 그림자로 물들여서 그림
+      const pick = pickAnim(s, state.elapsed, s.aiState === AI.CHASE || s.aiState === AI.RETURN, cfg, s.aiState === AI.ATTACK);
+      const alpha = 0.35 + 0.65 * Math.max(0, Math.min(1, spawnRatio));
+      drawSpriteFrame(ctx, cfg, true, pick.anim, pick.frame, s.x, s.y, s.facing || 1, alpha, EXTRACTED_SPRITE_SCALE, pick.bob);
+      if (state.selectedUnitUid === s.uid || view.hoverUnitUid === s.uid) {
+        ctx.strokeStyle = state.selectedUnitUid === s.uid ? COLORS.selected : COLORS.remnantRing;
+        ctx.lineWidth = state.selectedUnitUid === s.uid ? 2 : 1;
+        ctx.beginPath();
+        ctx.ellipse(s.x, spriteGroundY(s.y), 20, 7, 0, 0, Math.PI * 2);   // 발밑 선택 표시
+        ctx.stroke();
+        ctx.lineWidth = 1;
+      }
+      drawHpBar(ctx, s.x, spriteTopY(cfg, s.y, EXTRACTED_SPRITE_SCALE) - 6, 28, s.hp / s.maxHp, COLORS.hpExtracted);
+      continue;
+    }
     ctx.globalAlpha = 0.35 + 0.65 * Math.max(0, Math.min(1, spawnRatio));
     ctx.save();
     ctx.shadowColor = COLORS.extractedLine;
@@ -1318,9 +1537,17 @@ function render(ctx, state, view) {
   // 적
   for (const e of state.enemies) {
     const d = findEnemyData(e.typeId);
-    const sp = F.spawnPoints[e.spawn];
-    const clipTop = sp && sp.revealTop !== undefined ? sp.revealTop : null;
-    if (clipTop !== null) {   // 출현 연출: 지정한 선 위쪽은 가려서 벽 아래에서 나오는 것처럼
+    const clipTop = spawnClipTop(e.spawn);   // 출현 연출: 지정한 선 위쪽은 가려서 벽 아래에서 나오는 것처럼
+    const cfg = spriteFor(e.typeId);
+    if (cfg) {   // 스프라이트: 이동·공격·피격 애니메이션
+      const pick = pickAnim(e, state.elapsed, e.moving, cfg, !e.moving);
+      withClip(ctx, clipTop, () => {
+        drawSpriteFrame(ctx, cfg, false, pick.anim, pick.frame, e.x, e.y, e.facing || 1, 1, 1, pick.bob);
+        drawHpBar(ctx, e.x, spriteTopY(cfg, e.y, 1) - 6, 30, e.hp / e.maxHp, COLORS.hpEnemy);
+      });
+      continue;
+    }
+    if (clipTop !== null) {
       ctx.save();
       ctx.beginPath();
       ctx.rect(0, clipTop, F.width, F.height - clipTop);
@@ -1465,12 +1692,29 @@ function onSecondaryClick(evt) {
   clearSelection();
 }
 
+// 화면 좌표 → 전장 좌표 (캔버스 테두리 두께는 빼고 그림이 그려지는 안쪽 기준)
 function toFieldPos(evt) {
-  const rect = game.canvas.getBoundingClientRect();
+  const c = game.canvas;
+  const rect = c.getBoundingClientRect();
+  const F = GAME_DATA.field;
   return {
-    x: (evt.clientX - rect.left) * (game.canvas.width / rect.width),
-    y: (evt.clientY - rect.top) * (game.canvas.height / rect.height),
+    x: (evt.clientX - rect.left - c.clientLeft) * (F.width / c.clientWidth),
+    y: (evt.clientY - rect.top - c.clientTop) * (F.height / c.clientHeight),
   };
+}
+
+// 캔버스 해상도를 화면에 보이는 크기 × 기기 픽셀 배율로 맞춤 → 레티나 화면에서도 흐릿하지 않음
+function fitCanvasToScreen() {
+  const F = GAME_DATA.field;
+  const cssW = game.canvas.clientWidth;   // 테두리를 뺀 실제 그림 영역 폭
+  if (cssW === 0) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.round(cssW * dpr);
+  const h = Math.round(w * F.height / F.width);
+  if (game.canvas.width !== w || game.canvas.height !== h) {
+    game.canvas.width = w;
+    game.canvas.height = h;
+  }
 }
 
 function onCanvasClick(evt) {
@@ -1559,11 +1803,41 @@ function onResultPrimary() {
   else if (st.status === STATUS.VICTORY || st.status === STATUS.DEFEAT) newGame();
 }
 
+function onPause() {
+  if (pauseGame(game.state)) hideToast();
+}
+
+function onResume() {
+  if (resumeGame(game.state)) showToast('전투 재개', 'ok');
+}
+
+function togglePause() {
+  if (game.state.status === STATUS.PAUSED) onResume();
+  else onPause();
+}
+
+// 다른 탭·창으로 전환해 화면이 가려지면 자동으로 일시정지
+function onVisibilityChange() {
+  if (document.hidden) onPause();
+}
+
+function hasSelection(st) {
+  return st.selectedShadowId !== null || st.selectedRemnantUid !== null || st.selectedUnitUid !== null;
+}
+
 function onKeyDown(evt) {
   if (evt.repeat) return;
   const key = evt.key.toLowerCase();
   if (key === 'd') { game.view.showRanges = !game.view.showRanges; return; }
-  if (key === 'escape') { clearSelection(); return; }
+  if (key === 'p') { togglePause(); return; }
+  if (key === 'escape') {
+    // Esc: 일시정지 중이면 계속하기 → 선택된 것이 있으면 선택 해제 → 전투 중이면 일시정지
+    const st = game.state;
+    if (st.status === STATUS.PAUSED) onResume();
+    else if (hasSelection(st)) clearSelection();
+    else onPause();
+    return;
+  }
   const num = Number(evt.key);
   if (Number.isInteger(num) && num >= 1 && num <= GAME_DATA.shadows.length) selectShadow(GAME_DATA.shadows[num - 1].id);
 }
@@ -1680,9 +1954,15 @@ function syncUI() {
 
   setHidden(ui.btnStart, st.status !== STATUS.PREPARATION);
   setText(ui.btnStart, `WAVE ${st.wave} 시작`);
+  setHidden(ui.btnPause, st.status !== STATUS.PLAYING);   // 웨이브 시작 버튼 자리에 표시
 
   syncExtractPanel(st);
   syncUnitPanel(st);
+
+  setHidden(ui.overlayPause, st.status !== STATUS.PAUSED);
+  if (st.status === STATUS.PAUSED) {
+    setText(ui.pauseStats, `WAVE ${st.wave} · 처치 ${st.stats.waveKills} · 군단 ${countArmy(st)}/${C.maxArmy} · 거점 HP ${st.coreHp}/${st.maxCoreHp} · 에너지 ${st.energy}`);
+  }
 
   setHidden(ui.overlayTitle, st.status !== STATUS.READY);
   const showResult = st.status === STATUS.WAVE_CLEAR || st.status === STATUS.VICTORY || st.status === STATUS.DEFEAT;
@@ -1760,6 +2040,7 @@ function boot() {
     overlayTitle: $('overlay-title'), overlayResult: $('overlay-result'),
     resultTitle: $('result-title'), resultDesc: $('result-desc'),
     btnResultPrimary: $('btn-result-primary'),
+    btnPause: $('btn-pause'), overlayPause: $('overlay-pause'), pauseStats: $('pause-stats'),
   };
 
   game.state = createInitialState();
@@ -1773,6 +2054,7 @@ function boot() {
   };
   mapImage.onerror = () => console.warn(`[맵 이미지 불러오기 실패] ${MAP_IMAGE_SRC}`);
   mapImage.src = MAP_IMAGE_SRC;
+  loadSprites();   // 캐릭터 스프라이트 (불러오기 전·실패 시에는 원형으로 그림)
 
   game.canvas.addEventListener('click', onCanvasClick);
   game.canvas.addEventListener('mousemove', onMouseMove);
@@ -1788,7 +2070,14 @@ function boot() {
   $('btn-dismantle-confirm').addEventListener('click', onDismantleConfirm);
   game.ui.btnResultPrimary.addEventListener('click', onResultPrimary);
   $('btn-result-title').addEventListener('click', goToTitle);
+  game.ui.btnPause.addEventListener('click', onPause);
+  $('btn-resume').addEventListener('click', onResume);
+  $('btn-pause-restart').addEventListener('click', newGame);   // 모든 그림자·적·잔영·타이머 초기화
+  $('btn-pause-title').addEventListener('click', goToTitle);
   window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('resize', fitCanvasToScreen);
+  fitCanvasToScreen();
+  document.addEventListener('visibilitychange', onVisibilityChange);
 
   requestAnimationFrame(frame);
 }
