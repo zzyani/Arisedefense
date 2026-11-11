@@ -61,7 +61,7 @@ const GAME_DATA = {
 
   // 기본 소환 그림자: 원하는 위치에 배치하는 고정형 방어 병력
   shadows: [
-    { id: 'SH_001', name: '아이언',   role: 'tank',   cost: 30, maxHp: 300, attack: 20, attackInterval: 1.5, attackRange: 100, targetType: 'single',       color: '#4f86ff' },
+    { id: 'SH_001', name: '아이언',   role: 'tank',   cost: 30, maxHp: 300, attack: 20, attackInterval: 1.5, attackRange: 100, targetType: 'single',       color: '#4f86ff', attackFx: 'slam', cardImage: 'assets/cards/sh_001.webp' },
     { id: 'SH_002', name: '이그리트', role: 'damage', cost: 50, maxHp: 150, attack: 65, attackInterval: 1.0, attackRange: 80,  targetType: 'single',       color: '#a66bff', attackFx: 'slash', cardImage: 'assets/cards/sh_002.webp' },
     { id: 'SH_003', name: '탱크',     role: 'area',   cost: 40, maxHp: 220, attack: 35, attackInterval: 2.0, attackRange: 110, targetType: 'all_in_range', color: '#2ec4b6', attackFx: 'bearclaw', cardImage: 'assets/cards/sh_003.webp' },
   ],
@@ -919,7 +919,7 @@ function checkWaveComplete(state) {
 
 // 공격 연출 (게임 규칙에 영향 없음). style: 없으면 공격 선, 'claw'면 할퀴기 자국
 const LINE_FX_TIME = 0.12;
-const ATTACK_FX_TIME = { claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
+const ATTACK_FX_TIME = { claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
 function addEffect(state, x1, y1, x2, y2, kind, style) {
   const ttl = ATTACK_FX_TIME[style] || LINE_FX_TIME;
   const fx = { x1, y1, x2, y2, kind, style, ttl, life: ttl };
@@ -1125,6 +1125,22 @@ const SPRITES = {
       attack: { row: 1, frames: 5, fps: 10, strikeFrame: 3, groundY: 58 },   // 0~2 단검 들어올림, 3 돌진 베기(타격), 4 복귀
       hit:    { row: 2, frames: 2, fps: 10, groundY: 58 },
       death:  { row: 3, frames: 5, fps: 9, groundY: 58 },
+    },
+  },
+  SH_001: {   // 아이언 (방패 기사). 원본 격자가 고르지 않아 프레임마다 발 가운데·발끝을 맞춰 72×64 칸으로 정렬
+    src: 'assets/sprites/sh_001.png',   // 푸른 번개·방패 문양·눈빛을 보랏빛으로 바꾼 시트
+    cellW: 72, cellH: 64,
+    scale: 1,
+    glow: true,       // 그림자 유닛: 보랏빛 윤곽 빛
+    anchorX: 38,      // 칸 안에서 발 가운데 x
+    bodyTop: 10,      // 뿔 끝 높이 (HP바 위치)
+    shadow: { w: 18, h: 4, dx: 2, op: 1.4 },
+    anims: {
+      idle:   { row: 0, frames: 4, fps: 4, groundY: 60 },
+      walk:   { row: 1, frames: 6, fps: 8, stride: 36, groundY: 60 },   // 기본 그림자는 제자리라 지금은 쓰지 않음
+      attack: { row: 2, frames: 5, fps: 10, strikeFrame: 3, groundY: 60 },   // 0~2 방패 들어올림, 3 내려찍기(타격), 4 복귀
+      hit:    { row: 3, frames: 2, fps: 10, groundY: 60 },
+      death:  { row: 4, frames: 5, fps: 9, groundY: 60 },
     },
   },
   SH_003: {   // 탱크 (곰). 원본 격자가 고르지 않아 프레임마다 뒤쪽 끝·발끝을 맞춰 80×64 칸으로 정렬
@@ -1508,7 +1524,17 @@ const BEARCLAW_FX = {
   reach: 40,     // 곰이 바라보는 쪽으로 떨어진 거리(px)
   mirror: true,  // 원본 그림을 좌우로 뒤집어서 그림
 };
-const ATTACK_FX = { claw: CLAW_FX, slash: SLASH_FX, ice: ICE_FX, bearclaw: BEARCLAW_FX };
+// 아이언 방패 내려찍기 (assets/sprites/fx_slam.png, 75×48 도트 6프레임, 보랏빛). 땅에서 솟구치는 충격이라
+// 위아래를 뒤집지 않고, 그림 아래쪽을 아이언 발끝 높이에 맞춰 앞쪽에 그림
+const SLAM_FX = {
+  src: 'assets/sprites/fx_slam.png', w: 75, h: 48, frames: 6,
+  rows: {},
+  glow: { shadow: 'rgba(169, 139, 255, 0.6)' },
+  bodyLift: 10,  // 그림 아래(칸 y 46)가 발끝(판정 위치 +12)에 오도록
+  reach: 30,     // 아이언이 바라보는 쪽으로 떨어진 거리(px)
+  upright: true, // 위아래 반전 안 함
+};
+const ATTACK_FX = { claw: CLAW_FX, slash: SLASH_FX, ice: ICE_FX, bearclaw: BEARCLAW_FX, slam: SLAM_FX };
 
 // 잔영 (assets/sprites/remnant.png): 보랏빛 그림자 불꽃 6프레임 반복. 파일이 없으면 기존 원형으로 그림
 //  - 바닥 웅덩이를 쓰러진 적의 발밑에 맞춤. 클릭 판정(잔영 위치 반경 16px)은 그대로
@@ -1552,7 +1578,7 @@ function drawCoreSprite(ctx, core, state, hpRatio) {
 }
 
 function loadFxSheets() {
-  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, REMNANT_FX, CORE_SPRITE]) {
+  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, SLAM_FX, REMNANT_FX, CORE_SPRITE]) {
     const img = new Image();
     img.onload = () => { fx.img = fx.shade ? buildTintedSheet(img, fx.shade) : img; };
     img.onerror = () => console.warn(`[이펙트 불러오기 실패] ${fx.src}`);
@@ -1637,7 +1663,7 @@ function drawAttackFx(ctx, fx) {
   ctx.shadowColor = S.glow[fx.kind] || Object.values(S.glow)[0];   // 어두운 바닥에서도 보이도록 옅은 빛
   ctx.shadowBlur = 6;
   ctx.translate(x, y);
-  ctx.scale(S.mirror ? -dir : dir, -1);   // 위아래 반전: 위→아래로 긋는 모양 (mirror면 좌우도 반대로)
+  ctx.scale(S.mirror ? -dir : dir, S.upright ? 1 : -1);   // 위아래 반전: 위→아래로 긋는 모양 (mirror면 좌우도 반대로, upright면 위아래 그대로)
   ctx.drawImage(S.img, frame * S.w, row * S.h, S.w, S.h, -S.w / 2, -S.h / 2, S.w, S.h);
   ctx.restore();
   return true;
