@@ -63,7 +63,7 @@ const GAME_DATA = {
   shadows: [
     { id: 'SH_001', name: '아이언',   role: 'tank',   cost: 30, maxHp: 300, attack: 20, attackInterval: 1.5, attackRange: 100, targetType: 'single',       color: '#4f86ff' },
     { id: 'SH_002', name: '이그리트', role: 'damage', cost: 50, maxHp: 150, attack: 65, attackInterval: 1.0, attackRange: 80,  targetType: 'single',       color: '#a66bff', attackFx: 'slash', cardImage: 'assets/cards/sh_002.webp' },
-    { id: 'SH_003', name: '탱크',     role: 'area',   cost: 40, maxHp: 220, attack: 35, attackInterval: 2.0, attackRange: 110, targetType: 'all_in_range', color: '#2ec4b6' },
+    { id: 'SH_003', name: '탱크',     role: 'area',   cost: 40, maxHp: 220, attack: 35, attackInterval: 2.0, attackRange: 110, targetType: 'all_in_range', color: '#2ec4b6', attackFx: 'bearclaw', cardImage: 'assets/cards/sh_003.webp' },
   ],
 
   enemies: [
@@ -834,11 +834,13 @@ function processShadowAttacks(state) {
     if (targets.length === 0) continue;   // 대상이 없으면 쿨타임 0 유지 → 대상이 오면 즉시 공격
     const dmg = calcDamage(u.attack);
     faceToward(u, targets[0].x);   // 그림 방향(표시 전용)
-    for (const t of targets) {
+    const fxStyle = findShadowData(u.typeId).attackFx;
+    targets.forEach((t, ti) => {
       if (applyDamage(t, dmg)) killed.push(t);
       t.hitAt = state.elapsed;   // 피격 애니메이션용
-      addEffect(state, u.x, u.y, t.x, t.y, 'shadow', findShadowData(u.typeId).attackFx).facing = u.facing;   // 그림 방향 그대로
-    }
+      // 이펙트 그림은 유닛 앞에 1번만 (범위 공격이라도 겹쳐 그리지 않음). 이펙트가 없으면 대상마다 공격 선
+      if (!fxStyle || ti === 0) addEffect(state, u.x, u.y, t.x, t.y, 'shadow', fxStyle).facing = u.facing;
+    });
     u.attackAt = state.elapsed;
     u.cooldown = u.attackInterval;
   }
@@ -917,7 +919,7 @@ function checkWaveComplete(state) {
 
 // 공격 연출 (게임 규칙에 영향 없음). style: 없으면 공격 선, 'claw'면 할퀴기 자국
 const LINE_FX_TIME = 0.12;
-const ATTACK_FX_TIME = { claw: 0.3, slash: 0.46, ice: 0.3 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
+const ATTACK_FX_TIME = { claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
 function addEffect(state, x1, y1, x2, y2, kind, style) {
   const ttl = ATTACK_FX_TIME[style] || LINE_FX_TIME;
   const fx = { x1, y1, x2, y2, kind, style, ttl, life: ttl };
@@ -1123,6 +1125,22 @@ const SPRITES = {
       attack: { row: 1, frames: 5, fps: 10, strikeFrame: 3, groundY: 58 },   // 0~2 단검 들어올림, 3 돌진 베기(타격), 4 복귀
       hit:    { row: 2, frames: 2, fps: 10, groundY: 58 },
       death:  { row: 3, frames: 5, fps: 9, groundY: 58 },
+    },
+  },
+  SH_003: {   // 탱크 (곰). 원본 격자가 고르지 않아 프레임마다 뒤쪽 끝·발끝을 맞춰 80×64 칸으로 정렬
+    src: 'assets/sprites/sh_003.png',
+    cellW: 80, cellH: 64,
+    scale: 1,
+    glow: true,       // 그림자 유닛: 보랏빛 윤곽 빛
+    anchorX: 35,      // 칸 안에서 몸 가운데 x
+    bodyTop: 12,      // 갈기 끝 높이 (HP바 위치)
+    shadow: { w: 24, h: 4, dx: 0, op: 1.3 },
+    anims: {
+      idle:   { row: 0, frames: 4, fps: 4, groundY: 60 },
+      walk:   { row: 1, frames: 6, fps: 8, stride: 40, groundY: 60 },   // 기본 그림자는 제자리라 지금은 쓰지 않음
+      attack: { row: 2, frames: 6, fps: 10, strikeFrame: 4, groundY: 60 },   // 0~3 웅크렸다 일어섬, 4 내려찍기(타격), 5 복귀
+      hit:    { row: 3, frames: 2, fps: 10, groundY: 60 },
+      death:  { row: 4, frames: 5, fps: 9, groundY: 60 },
     },
   },
   SH_002: {   // 이그리트 (기본 그림자: 제자리 고정이라 이동 동작 없음)
@@ -1481,7 +1499,16 @@ const ICE_FX = {
   bodyLift: 10,  // 판정 위치에서 위로(px) = 말 머리·단검 높이
   reach: 22,     // 돌격형이 바라보는 쪽으로 떨어진 거리(px)
 };
-const ATTACK_FX = { claw: CLAW_FX, slash: SLASH_FX, ice: ICE_FX };
+// 탱크 발톱 (assets/sprites/fx_bearclaw.png, 69×46 도트 6프레임). 곰이 바라보는 쪽 바로 앞에 내려찍듯 그림
+const BEARCLAW_FX = {
+  src: 'assets/sprites/fx_bearclaw.png', w: 69, h: 46, frames: 6,
+  rows: {},
+  glow: { shadow: 'rgba(169, 139, 255, 0.6)' },
+  bodyLift: 8,   // 판정 위치에서 위로(px) = 앞발 높이
+  reach: 40,     // 곰이 바라보는 쪽으로 떨어진 거리(px)
+  mirror: true,  // 원본 그림을 좌우로 뒤집어서 그림
+};
+const ATTACK_FX = { claw: CLAW_FX, slash: SLASH_FX, ice: ICE_FX, bearclaw: BEARCLAW_FX };
 
 // 잔영 (assets/sprites/remnant.png): 보랏빛 그림자 불꽃 6프레임 반복. 파일이 없으면 기존 원형으로 그림
 //  - 바닥 웅덩이를 쓰러진 적의 발밑에 맞춤. 클릭 판정(잔영 위치 반경 16px)은 그대로
@@ -1525,7 +1552,7 @@ function drawCoreSprite(ctx, core, state, hpRatio) {
 }
 
 function loadFxSheets() {
-  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, REMNANT_FX, CORE_SPRITE]) {
+  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, REMNANT_FX, CORE_SPRITE]) {
     const img = new Image();
     img.onload = () => { fx.img = fx.shade ? buildTintedSheet(img, fx.shade) : img; };
     img.onerror = () => console.warn(`[이펙트 불러오기 실패] ${fx.src}`);
@@ -1610,7 +1637,7 @@ function drawAttackFx(ctx, fx) {
   ctx.shadowColor = S.glow[fx.kind] || Object.values(S.glow)[0];   // 어두운 바닥에서도 보이도록 옅은 빛
   ctx.shadowBlur = 6;
   ctx.translate(x, y);
-  ctx.scale(dir, -1);   // 위아래 반전: 위→아래로 긋는 모양
+  ctx.scale(S.mirror ? -dir : dir, -1);   // 위아래 반전: 위→아래로 긋는 모양 (mirror면 좌우도 반대로)
   ctx.drawImage(S.img, frame * S.w, row * S.h, S.w, S.h, -S.w / 2, -S.h / 2, S.w, S.h);
   ctx.restore();
   return true;
