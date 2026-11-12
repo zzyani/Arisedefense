@@ -13,9 +13,9 @@
 
     <!-- 상단 HUD -->
     <header id="hud">
-      <div class="hud-item">WAVE <b id="hud-wave">1 / 5</b></div>
+      <div class="hud-item"><span id="hud-chapter">챕터 1</span> · WAVE <b id="hud-wave">1 / 5</b></div>
       <div class="hud-item">그림자 에너지 <b id="hud-energy">100 / 150</b></div>
-      <div class="hud-item">거점 HP <b id="hud-core">200 / 200</b></div>
+      <div class="hud-item">거점 HP <b id="hud-core"><span id="hud-core-cur">200</span> / <span id="hud-core-max">200</span></b></div>
       <div class="hud-item">군단 <b id="hud-army">0 / 15</b> <small id="hud-army-basic">기본 0/4</small></div>
       <div class="hud-item hud-status" id="hud-status">대기</div>
     </header>
@@ -74,9 +74,22 @@
         <div class="sys-divider"></div>
         <p class="eyebrow">나 혼자만 레벨업 IP 기반 비공식 팬 제작 포트폴리오</p>
         <h1>Arise:그림자군단 디펜스</h1>
-        <p class="desc sys-msg">[사방에서 몰려오는 5개의 웨이브로부터 <em>중앙 거점</em>을 지켜내세요.<br>적이 쓰러진 자리의 잔영에서 <em>그림자</em>를 추출해 군단을 키우세요.]</p>
+        <p class="desc sys-msg">[챕터마다 사방에서 몰려오는 5개의 웨이브로부터 <em>중앙 거점</em>을 지켜내세요.<br>적이 쓰러진 자리의 잔영에서 <em>그림자</em>를 추출해 군단을 키우세요.]</p>
         <div class="overlay-buttons">
           <button id="btn-play" type="button" class="btn-primary">게임 시작</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 챕터 선택: 클리어하면 다음 챕터 해금, 웨이브를 클리어할 때마다 진행 저장 (이어하기) -->
+    <div id="overlay-chapters" class="overlay hidden">
+      <div class="panel sys-window chapter-panel">
+        <p class="sys-title">챕터 선택</p>
+        <div class="sys-divider"></div>
+        <div id="chapter-list" class="chapter-list"></div>
+        <p class="chapter-note">웨이브를 클리어할 때마다 진행 상황이 이 브라우저에 저장됩니다.</p>
+        <div class="overlay-buttons">
+          <button id="btn-chapters-back" type="button" class="btn-secondary">타이틀로</button>
         </div>
       </div>
     </div>
@@ -91,8 +104,8 @@
         <p id="pause-stats" class="pause-stats"></p>
         <div class="overlay-buttons">
           <button id="btn-resume" type="button" class="btn-primary">계속하기</button>
-          <button id="btn-pause-restart" type="button" class="btn-secondary">다시 시작</button>
-          <button id="btn-pause-title" type="button" class="btn-secondary">타이틀로</button>
+          <button id="btn-pause-restart" type="button" class="btn-secondary">처음부터 다시</button>
+          <button id="btn-pause-title" type="button" class="btn-secondary">챕터 선택</button>
         </div>
         <p class="pause-keys">P 또는 Esc 를 눌러 계속하기</p>
       </div>
@@ -105,9 +118,10 @@
         <div class="sys-divider"></div>
         <h2 id="result-title"></h2>
         <p id="result-desc" class="desc sys-msg"></p>
+        <p id="result-extra" class="result-extra hidden"></p>
         <div class="overlay-buttons">
           <button id="btn-result-primary" type="button" class="btn-primary"></button>
-          <button id="btn-result-title" type="button" class="btn-secondary">타이틀로</button>
+          <button id="btn-result-title" type="button" class="btn-secondary">챕터 선택</button>
         </div>
       </div>
     </div>

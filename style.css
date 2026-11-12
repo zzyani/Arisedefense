@@ -90,7 +90,7 @@ button { font-family: inherit; }
   font-weight: normal;
 }
 
-#hud-core.danger { color: var(--warn); }
+#hud-core-cur.danger { color: var(--warn); }   /* 거점 HP 50 이하: 현재 HP 숫자만 붉게 ('/ 최대'는 그대로) */
 
 .hud-item small { font-size: 11px; color: var(--sub); margin-left: 4px; }
 
@@ -551,6 +551,47 @@ h2 {
 #overlay-result[data-kind="victory"] h2 { color: var(--ok); text-shadow: 0 0 10px rgba(61, 220, 151, 0.5); }
 #overlay-result[data-kind="defeat"] h2 { color: var(--warn); text-shadow: 0 0 10px rgba(255, 92, 122, 0.5); }
 #overlay-result[data-kind="wave_clear"] h2 { color: var(--accent-2); text-shadow: 0 0 10px var(--glow); }
+
+/* ---------- 챕터 선택 ---------- */
+.chapter-panel { max-width: 640px; width: calc(100% - 32px); }
+.chapter-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+  margin: 16px 0 10px;
+  text-align: left;
+}
+.chapter-card {
+  position: relative;
+  padding: 12px 14px 14px;
+  background: linear-gradient(180deg, rgba(28, 60, 110, 0.35), rgba(10, 18, 34, 0.9));
+  border: var(--px) solid var(--line);
+  box-shadow: inset 0 0 0 var(--px) rgba(5, 10, 20, 0.9);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.chapter-card.cleared { border-color: var(--ok); }
+.chapter-card.locked { opacity: 0.55; filter: grayscale(0.6); }
+.chapter-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.chapter-no { font-size: 11px; color: var(--accent-2); letter-spacing: 1px; }
+.chapter-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border: var(--px) solid var(--line);
+  color: var(--sub);
+}
+.chapter-card.cleared .chapter-badge { color: var(--ok); border-color: var(--ok); }
+.chapter-card.progress .chapter-badge { color: var(--key); border-color: var(--key); }
+.chapter-name { margin: 2px 0 0; font-family: var(--font-head); font-size: 18px; font-weight: normal; color: var(--text); }
+.chapter-desc { margin: 0; font-size: 11px; color: var(--sub); line-height: 1.6; }
+.chapter-info { margin: 0; font-size: 11px; color: var(--text); }
+.chapter-info.resume { color: var(--key); }
+.chapter-buttons { display: flex; gap: 8px; margin-top: 8px; }
+.chapter-buttons button { flex: 1; padding: 8px 10px; font-size: 12px; }
+.chapter-buttons button:disabled { cursor: not-allowed; opacity: 0.7; }
+.chapter-note { font-size: 11px; color: var(--sub); margin: 0 0 16px; }
+.result-extra { margin: -12px 0 20px; font-size: 13px; color: var(--key); }
 
 /* ---------- 데이터 오류 ---------- */
 #data-error {

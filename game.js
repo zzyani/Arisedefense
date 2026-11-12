@@ -87,36 +87,74 @@ const GAME_DATA = {
     ],
   },
 
+  // 챕터: 챕터마다 웨이브 5개. 앞 챕터를 클리어하면 다음 챕터가 해금됨 (진행·기록은 브라우저에 저장)
   // 적은 배열 순서대로 spawnInterval 간격으로 생성됩니다 (첫 적은 웨이브 시작 즉시).
-  // 북·남 출현 지점은 거점과 가까워(약 185px) 동·서(약 395px)보다 빨리 도착합니다.
-  waves: [
-    { waveId: 1, spawnInterval: 2.5, enemies: [
-      { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_001', spawn: 3 },
-      { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_001', spawn: 2 },
+  // 북·남 출현 지점은 거점과 가까워(약 235px) 동·서(약 456px)보다 빨리 도착합니다.
+  chapters: [
+    { chapterId: 1, name: '던전 입구', desc: '늑대와 얼음 기수가 몰려오는 첫 관문', waves: [
+      { waveId: 1, spawnInterval: 2.5, enemies: [
+        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_001', spawn: 3 },
+        { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_001', spawn: 2 },
+      ] },
+      { waveId: 2, spawnInterval: 2.2, enemies: [
+        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
+        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 1 },
+        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_002', spawn: 2 },
+      ] },
+      { waveId: 3, spawnInterval: 2.0, enemies: [
+        { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 3 }, { enemyId: 'EN_001', spawn: 0 },
+        { enemyId: 'EN_003', spawn: 3 }, { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 1 },
+        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_002', spawn: 0 }, { enemyId: 'EN_001', spawn: 1 },
+        { enemyId: 'EN_001', spawn: 2 },
+      ] },
+      { waveId: 4, spawnInterval: 1.8, enemies: [
+        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
+        { enemyId: 'EN_003', spawn: 1 }, { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_001', spawn: 3 },
+        { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_003', spawn: 3 }, { enemyId: 'EN_002', spawn: 1 },
+        { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 },
+      ] },
+      { waveId: 5, spawnInterval: 1.6, enemies: [
+        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
+        { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_003', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 },
+        { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_003', spawn: 1 }, { enemyId: 'EN_002', spawn: 3 },
+        { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 1 }, { enemyId: 'EN_003', spawn: 0 },
+        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_001', spawn: 1 },
+      ] },
     ] },
-    { waveId: 2, spawnInterval: 2.2, enemies: [
-      { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
-      { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 1 },
-      { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_002', spawn: 2 },
-    ] },
-    { waveId: 3, spawnInterval: 2.0, enemies: [
-      { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 3 }, { enemyId: 'EN_001', spawn: 0 },
-      { enemyId: 'EN_003', spawn: 3 }, { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 1 },
-      { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_002', spawn: 0 }, { enemyId: 'EN_001', spawn: 1 },
-      { enemyId: 'EN_001', spawn: 2 },
-    ] },
-    { waveId: 4, spawnInterval: 1.8, enemies: [
-      { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
-      { enemyId: 'EN_003', spawn: 1 }, { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_001', spawn: 3 },
-      { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_003', spawn: 3 }, { enemyId: 'EN_002', spawn: 1 },
-      { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 },
-    ] },
-    { waveId: 5, spawnInterval: 1.6, enemies: [
-      { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
-      { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_003', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 },
-      { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_003', spawn: 1 }, { enemyId: 'EN_002', spawn: 3 },
-      { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 1 }, { enemyId: 'EN_003', spawn: 0 },
-      { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_001', spawn: 1 },
+    { chapterId: 2, name: '균열의 회랑', desc: '코브라가 섞여 사방에서 동시에 밀려오는 회랑', waves: [
+      { waveId: 1, spawnInterval: 2.2, enemies: [
+        { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 1 },
+        { enemyId: 'EN_002', spawn: 3 }, { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 },
+        { enemyId: 'EN_002', spawn: 0 }, { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 3 },
+      ] },
+      { waveId: 2, spawnInterval: 2.0, enemies: [
+        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
+        { enemyId: 'EN_003', spawn: 3 }, { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_001', spawn: 1 },
+        { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_002', spawn: 3 }, { enemyId: 'EN_001', spawn: 2 },
+        { enemyId: 'EN_002', spawn: 1 }, { enemyId: 'EN_001', spawn: 3 },
+      ] },
+      { waveId: 3, spawnInterval: 1.9, enemies: [
+        { enemyId: 'EN_002', spawn: 0 }, { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_001', spawn: 3 },
+        { enemyId: 'EN_003', spawn: 1 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 3 },
+        { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_003', spawn: 3 }, { enemyId: 'EN_002', spawn: 1 },
+        { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 0 }, { enemyId: 'EN_001', spawn: 3 },
+        { enemyId: 'EN_001', spawn: 1 },
+      ] },
+      { waveId: 4, spawnInterval: 1.7, enemies: [
+        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_003', spawn: 0 },
+        { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_002', spawn: 3 }, { enemyId: 'EN_003', spawn: 1 },
+        { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 1 },
+        { enemyId: 'EN_003', spawn: 3 }, { enemyId: 'EN_002', spawn: 0 }, { enemyId: 'EN_001', spawn: 1 },
+        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_001', spawn: 0 },
+      ] },
+      { waveId: 5, spawnInterval: 1.5, enemies: [
+        { enemyId: 'EN_003', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
+        { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_003', spawn: 1 }, { enemyId: 'EN_001', spawn: 3 },
+        { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_002', spawn: 1 }, { enemyId: 'EN_003', spawn: 0 },
+        { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 3 }, { enemyId: 'EN_003', spawn: 2 },
+        { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 }, { enemyId: 'EN_001', spawn: 3 },
+        { enemyId: 'EN_002', spawn: 1 }, { enemyId: 'EN_001', spawn: 2 },
+      ] },
     ] },
   ],
 };
@@ -178,11 +216,12 @@ const REASON_TEXT = Object.freeze({
 const ROLE_TEXT = Object.freeze({ tank: '탱커', damage: '딜러', area: '광역' });
 const AI_TEXT = Object.freeze({ SPAWN: '추출 중', IDLE: '대기', CHASE: '추격', ATTACK: '공격', RETURN: '복귀', DEAD: '사망' });
 
-function createInitialState() {
+function createInitialState(chapterId = GAME_DATA.chapters[0].chapterId) {
   const c = GAME_DATA.config;
   return {
     status: STATUS.READY,
     previousStatus: null,
+    chapterId,                // 플레이 중인 챕터
     wave: 1,
     energy: c.startEnergy,
     maxEnergy: c.maxEnergy,
@@ -229,7 +268,12 @@ function setStatus(state, next) {
 function findShadowData(id)     { return GAME_DATA.shadows.find((s) => s.id === id) || null; }
 function findEnemyData(id)      { return GAME_DATA.enemies.find((e) => e.id === id) || null; }
 function findExtractionData(id) { return GAME_DATA.extraction.units.find((u) => u.sourceEnemyId === id) || null; }
-function getWaveData(waveNumber) { return GAME_DATA.waves[waveNumber - 1] || null; }
+function getChapter(chapterId)  { return GAME_DATA.chapters.find((c) => c.chapterId === chapterId) || null; }
+function getWaveCount(state)    { const ch = getChapter(state.chapterId); return ch ? ch.waves.length : 0; }
+function getWaveData(state, waveNumber) {
+  const ch = getChapter(state.chapterId);
+  return (ch && ch.waves[waveNumber - 1]) || null;
+}
 
 function dist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
 function isFieldActive(state) { return state.status === STATUS.PREPARATION || state.status === STATUS.PLAYING; }
@@ -374,7 +418,14 @@ function summonShadow(state, shadowId, x, y) {
   const d = check.data;
   state.energy -= d.cost;
   state.stats.energySpent += d.cost;
-  const unit = {
+  const unit = makeBasicUnit(state, d, x, y);
+  state.basicUnits.push(unit);
+  return { ok: true, unit };
+}
+
+// 기본 그림자 객체 생성 (배치·이어하기 복원 공용)
+function makeBasicUnit(state, d, x, y) {
+  return {
     uid: state.nextUid++,
     typeId: d.id,
     kind: 'basic',
@@ -392,8 +443,6 @@ function summonShadow(state, shadowId, x, y) {
     // 준비 단계에서 배치한 그림자만 회수 가능. 웨이브가 시작되면 false로 잠김
     recallable: state.status === STATUS.PREPARATION,
   };
-  state.basicUnits.push(unit);
-  return { ok: true, unit };
 }
 
 // (x, y)에 있는 기본 그림자 (그림자 사각형 안)
@@ -535,24 +584,36 @@ function extractShadow(state, remnantUid) {
   const check = canExtract(state, remnantUid);
   if (!check.ok) return check;
   const { remnant, data } = check;
-  const ex = GAME_DATA.extraction;
 
   state.energy -= data.cost;
   state.stats.energySpent += data.cost;
   state.remnants = state.remnants.filter((r) => r.uid !== remnant.uid);
   if (state.selectedRemnantUid === remnant.uid) state.selectedRemnantUid = null;
 
-  const unit = {
+  const unit = makeExtractedUnit(state, data, remnant.x, remnant.y);
+  clampToField(unit);   // 추출 그림자는 배치 제한 없이 맵 범위만 검사
+  pushOutOfCore(unit);  // 거점 바로 옆에서 처치된 경우 거점과 겹치지 않게
+  unit.originX = unit.x;
+  unit.originY = unit.y;
+  state.extractedUnits.push(unit);
+  state.stats.extractionSuccesses += 1;
+  return { ok: true, unit, data };
+}
+
+// 추출 그림자 객체 생성 (추출·이어하기 복원 공용). data = extraction.units 항목
+function makeExtractedUnit(state, data, x, y) {
+  const ex = GAME_DATA.extraction;
+  return {
     uid: state.nextUid++,
     kind: 'extracted',
-    sourceEnemyId: remnant.sourceEnemyId,
+    sourceEnemyId: data.sourceEnemyId,
     aiState: AI.SPAWN,
     spawnTimer: ex.spawnDelay,
-    x: remnant.x,
-    y: remnant.y,
-    radius: Math.round((findEnemyData(remnant.sourceEnemyId) || { radius: 14 }).radius * 0.9),   // 그리기·거점 충돌 반경
-    originX: 0,
-    originY: 0,
+    x,
+    y,
+    radius: Math.round((findEnemyData(data.sourceEnemyId) || { radius: 14 }).radius * 0.9),   // 그리기·거점 충돌 반경
+    originX: x,
+    originY: y,
     hp: data.maxHp,
     maxHp: data.maxHp,
     attack: data.attack,
@@ -566,13 +627,6 @@ function extractShadow(state, remnantUid) {
     alive: true,
     energyCostPaid: data.cost, // 실제 소비 에너지 → 해체 반환 기준
   };
-  clampToField(unit);   // 추출 그림자는 배치 제한 없이 맵 범위만 검사
-  pushOutOfCore(unit);  // 거점 바로 옆에서 처치된 경우 거점과 겹치지 않게
-  unit.originX = unit.x;
-  unit.originY = unit.y;
-  state.extractedUnits.push(unit);
-  state.stats.extractionSuccesses += 1;
-  return { ok: true, unit, data };
 }
 
 /* ---------- 적 ---------- */
@@ -656,7 +710,7 @@ function findChaseTarget(state, shadow) {
 
 function startWave(state) {
   if (state.status !== STATUS.PREPARATION) return false;
-  if (!getWaveData(state.wave)) return false;
+  if (!getWaveData(state, state.wave)) return false;
   if (state.wave >= 2) addEnergy(state, GAME_DATA.config.waveStartBonus);
   for (const u of state.basicUnits) u.recallable = false;   // 전투에 들어간 그림자는 회수 잠금
   state.spawnIndex = 0;
@@ -672,6 +726,117 @@ function goToNextWave(state) {
   state.wave += 1;
   state.corpses = [];
   return setStatus(state, STATUS.PREPARATION);
+}
+
+/* ---------- 챕터 진행 저장 ----------
+ * 규칙 쪽은 저장 데이터를 만들고 읽기만 함 (브라우저 저장소에 쓰는 것은 UI 쪽 persistSave)
+ *  save.cleared[챕터] = { best: { coreHp, kills, extractions } }   클리어한 챕터와 최고 기록(남은 거점 HP 기준)
+ *  save.resume[챕터]  = run                                          웨이브를 클리어한 순간의 진행 상황
+ *  run: 다음 웨이브 번호·에너지·거점 HP·통계·살아 있는 그림자 → 다음 웨이브 배치 준비부터 이어함
+ *  - 앞 챕터를 클리어해야 다음 챕터가 해금됨
+ *  - 패배하거나 챕터를 클리어하면 그 챕터의 이어하기는 지워짐 (도중에 나가면 마지막 클리어 웨이브부터) */
+const SAVE_VERSION = 1;
+
+function createEmptySave() { return { version: SAVE_VERSION, cleared: {}, resume: {} }; }
+
+function isNum(v) { return typeof v === 'number' && Number.isFinite(v); }
+
+// 저장소에서 읽은 값을 검사해 올바른 부분만 살림 (깨졌거나 버전이 다르면 빈 저장)
+function normalizeSave(raw) {
+  const save = createEmptySave();
+  if (!raw || typeof raw !== 'object' || raw.version !== SAVE_VERSION) return save;
+  for (const ch of GAME_DATA.chapters) {
+    const id = ch.chapterId;
+    const c = raw.cleared && raw.cleared[id];
+    if (c && typeof c === 'object') {
+      const b = c.best || {};
+      save.cleared[id] = { best: { coreHp: isNum(b.coreHp) ? b.coreHp : 0, kills: isNum(b.kills) ? b.kills : 0, extractions: isNum(b.extractions) ? b.extractions : 0 } };
+    }
+    const r = raw.resume && raw.resume[id];
+    if (isValidRun(r, ch)) save.resume[id] = r;
+  }
+  return save;
+}
+
+function isValidRun(r, ch) {
+  if (!r || typeof r !== 'object' || r.chapterId !== ch.chapterId) return false;
+  if (!Number.isInteger(r.wave) || r.wave < 2 || r.wave > ch.waves.length) return false;
+  if (!isNum(r.energy) || !isNum(r.coreHp) || r.coreHp <= 0) return false;
+  return Array.isArray(r.basic) && Array.isArray(r.extracted) && r.stats && typeof r.stats === 'object';
+}
+
+function isChapterUnlocked(save, chapterId) {
+  const i = GAME_DATA.chapters.findIndex((c) => c.chapterId === chapterId);
+  if (i < 0) return false;
+  if (i === 0) return true;
+  return !!save.cleared[GAME_DATA.chapters[i - 1].chapterId];
+}
+
+function getNextChapter(chapterId) {
+  const i = GAME_DATA.chapters.findIndex((c) => c.chapterId === chapterId);
+  return i >= 0 ? GAME_DATA.chapters[i + 1] || null : null;
+}
+
+// 웨이브 클리어(WAVE_CLEAR) 순간의 진행 상황. 추출 그림자는 원점(대기 위치)에 둠
+function serializeRun(state) {
+  return {
+    chapterId: state.chapterId,
+    wave: state.wave + 1,
+    energy: state.energy,
+    coreHp: state.coreHp,
+    stats: Object.assign({}, state.stats, { waveKills: 0 }),
+    basic: state.basicUnits.filter((u) => u.alive).map((u) => ({
+      typeId: u.typeId, x: u.x, y: u.y, hp: u.hp, energyCostPaid: u.energyCostPaid,
+    })),
+    extracted: state.extractedUnits.filter((u) => u.alive).map((u) => ({
+      sourceEnemyId: u.sourceEnemyId, x: u.originX, y: u.originY, hp: u.hp, energyCostPaid: u.energyCostPaid,
+    })),
+  };
+}
+
+// 저장된 진행 상황 → 다음 웨이브 배치 준비(PREPARATION) 상태. 이전 웨이브의 그림자라 회수는 불가
+function restoreRun(run) {
+  const C = GAME_DATA.config;
+  const state = createInitialState(run.chapterId);
+  state.wave = run.wave;
+  state.energy = Math.max(0, Math.min(C.maxEnergy, Math.round(run.energy)));
+  state.coreHp = Math.max(1, Math.min(C.coreHp, Math.round(run.coreHp)));
+  for (const k of Object.keys(state.stats)) if (isNum(run.stats[k])) state.stats[k] = run.stats[k];
+  state.stats.waveKills = 0;
+  setStatus(state, STATUS.PREPARATION);
+  for (const b of run.basic) {
+    const d = findShadowData(b.typeId);
+    if (!d || !isNum(b.x) || !isNum(b.y)) continue;
+    const u = makeBasicUnit(state, d, b.x, b.y);
+    if (isNum(b.hp)) u.hp = Math.max(1, Math.min(d.maxHp, Math.round(b.hp)));
+    if (isNum(b.energyCostPaid)) u.energyCostPaid = b.energyCostPaid;
+    u.recallable = false;
+    state.basicUnits.push(u);
+  }
+  for (const e of run.extracted) {
+    const data = findExtractionData(e.sourceEnemyId);
+    if (!data || !isNum(e.x) || !isNum(e.y)) continue;
+    const u = makeExtractedUnit(state, data, e.x, e.y);
+    if (isNum(e.hp)) u.hp = Math.max(1, Math.min(data.maxHp, Math.round(e.hp)));
+    if (isNum(e.energyCostPaid)) u.energyCostPaid = e.energyCostPaid;
+    u.aiState = AI.IDLE;
+    u.spawnTimer = 0;
+    state.extractedUnits.push(u);
+  }
+  return state;
+}
+
+// 챕터 클리어 기록. 반환: 처음 클리어인지, 최고 기록인지, 새로 해금된 다음 챕터
+function recordChapterClear(save, state) {
+  const id = state.chapterId;
+  const prev = save.cleared[id];
+  const run = { coreHp: state.coreHp, kills: state.stats.kills, extractions: state.stats.extractionSuccesses };
+  const next = getNextChapter(id);
+  const unlockedNext = next && !isChapterUnlocked(save, next.chapterId) ? next : null;
+  const newRecord = !prev || run.coreHp > prev.best.coreHp;
+  save.cleared[id] = { best: newRecord ? run : prev.best };
+  delete save.resume[id];
+  return { firstClear: !prev, newRecord, unlockedNext };
 }
 
 /* ---------- 일시정지 ----------
@@ -726,7 +891,7 @@ function updateGame(state, dt) {
 }
 
 function updateSpawning(state, dt) {
-  const wave = getWaveData(state.wave);
+  const wave = getWaveData(state, state.wave);
   if (!wave || state.spawnIndex >= wave.enemies.length) return;
   state.spawnTimer -= dt;
   while (state.spawnTimer <= 0 && state.spawnIndex < wave.enemies.length) {
@@ -788,13 +953,6 @@ function pickCoreSlot(state, e, core) {
     }
   }
   return a0;
-}
-
-function angleDiff(a, b) {   // a - b 를 -π ~ π 로
-  let d = (a - b) % (Math.PI * 2);
-  if (d > Math.PI) d -= Math.PI * 2;
-  if (d < -Math.PI) d += Math.PI * 2;
-  return d;
 }
 
 // 거점 둘레(반경 = 거점 + 자기 크기)를 따라 자리 각도로 step(px)만큼 이동. 도착하면 atCore = true
@@ -918,6 +1076,7 @@ function processEnemyAttacks(state) {
       if (!e.atCore) continue;
       state.coreHp = Math.max(0, state.coreHp - e.attack);
       state.stats.coreDamageTaken += e.attack;
+      state.coreHitAt = state.elapsed;   // 거점 흔들림 연출용 (표시 전용)
       faceToward(e, core.x);
       e.attackAt = state.elapsed;
       addEffect(state, e.x, e.y, core.x, core.y, 'enemy', findEnemyData(e.typeId).attackFx).facing = e.facing;
@@ -967,10 +1126,10 @@ function cleanupDead(state) {
 }
 
 function checkWaveComplete(state) {
-  const wave = getWaveData(state.wave);
+  const wave = getWaveData(state, state.wave);
   if (!wave) return;
   if (state.spawnIndex < wave.enemies.length || state.enemies.length > 0) return;
-  const isLast = state.wave >= GAME_DATA.waves.length;
+  const isLast = state.wave >= getWaveCount(state);   // 챕터 마지막 웨이브 → 챕터 클리어
   // 웨이브가 끝나면 추출하지 않은 잔영은 모두 사라짐 → 준비 단계에는 잔영이 남지 않음
   state.remnants = [];
   state.selectedRemnantUid = null;
@@ -1049,13 +1208,21 @@ function validateGameData(data) {
     }
   }
 
-  if (!data.waves.length) errors.push('waves: 웨이브가 없습니다.');
-  data.waves.forEach((w, i) => {
-    if (!isPos(w.spawnInterval)) errors.push(`waves[${i}]: spawnInterval 값이 올바르지 않습니다.`);
-    if (!w.enemies.length) errors.push(`waves[${i}]: 적이 없습니다.`);
-    w.enemies.forEach((en, j) => {
-      if (!data.enemies.some((d) => d.id === en.enemyId)) errors.push(`waves[${i}].enemies[${j}]: 없는 적 ID ${en.enemyId}`);
-      if (!Number.isInteger(en.spawn) || en.spawn < 0 || en.spawn >= F.spawnPoints.length) errors.push(`waves[${i}].enemies[${j}]: spawn은 0~${F.spawnPoints.length - 1} 사이여야 합니다.`);
+  if (!data.chapters || !data.chapters.length) errors.push('chapters: 챕터가 없습니다.');
+  const chapterIds = new Set();
+  (data.chapters || []).forEach((ch, ci) => {
+    const at = `chapters[${ci}]`;
+    if (!Number.isInteger(ch.chapterId) || ch.chapterId < 1) errors.push(`${at}: chapterId는 1 이상의 정수여야 합니다.`);
+    if (chapterIds.has(ch.chapterId)) errors.push(`${at}: 중복 chapterId ${ch.chapterId}`);
+    chapterIds.add(ch.chapterId);
+    if (!ch.waves || !ch.waves.length) { errors.push(`${at}: 웨이브가 없습니다.`); return; }
+    ch.waves.forEach((w, i) => {
+      if (!isPos(w.spawnInterval)) errors.push(`${at}.waves[${i}]: spawnInterval 값이 올바르지 않습니다.`);
+      if (!w.enemies.length) errors.push(`${at}.waves[${i}]: 적이 없습니다.`);
+      w.enemies.forEach((en, j) => {
+        if (!data.enemies.some((d) => d.id === en.enemyId)) errors.push(`${at}.waves[${i}].enemies[${j}]: 없는 적 ID ${en.enemyId}`);
+        if (!Number.isInteger(en.spawn) || en.spawn < 0 || en.spawn >= F.spawnPoints.length) errors.push(`${at}.waves[${i}].enemies[${j}]: spawn은 0~${F.spawnPoints.length - 1} 사이여야 합니다.`);
+      });
     });
   });
   return errors;
@@ -1597,7 +1764,7 @@ const BITE_FX = {
   rows: { enemy: 0, extracted: 1 },
   glow: { enemy: 'rgba(80, 200, 255, 0.55)', extracted: 'rgba(160, 120, 255, 0.6)' },
   bodyLift: 19,  // 판정 위치에서 위로(px) = 물기 프레임의 입 높이 (발끝은 아래로 12px)
-  reach: 48,     // 뱀이 바라보는 쪽으로 떨어진 거리(px) = 입 끝
+  reach: 42,     // 뱀이 바라보는 쪽으로 떨어진 거리(px) = 입 끝에 살짝 겹치게
   upright: true, // 그린 모양 그대로 (위아래 반전 안 함)
 };
 // 탱크 발톱 (assets/sprites/fx_bearclaw.png, 69×56 도트 6프레임, 세로로 1.22배 늘림). 곰이 바라보는 쪽 바로 앞에 내려찍듯 그림
@@ -1646,21 +1813,43 @@ const CORE_SPRITE = {
   starY: 44,                           // 윗면 별 문양 가운데 높이 → HP 숫자 위치
 };
 
+// 거점 피격 흔들림: 맞은 순간 좌우로 크게(3px) 흔들리다 잦아들고, 처음에만 아래로 1px 덜컹. 1px 단위라 도트가 번지지 않음
+const CORE_SHAKE_TIME = 0.3;   // 지속(초)
+const CORE_SHAKE_PX = 3;       // 최대 폭(px)
+const CORE_SHAKE_HZ = 22;      // 빠르기
+function coreShake(state) {
+  if (state.coreHitAt === undefined) return { dx: 0, dy: 0 };
+  const t = state.elapsed - state.coreHitAt;
+  if (t < 0 || t >= CORE_SHAKE_TIME) return { dx: 0, dy: 0 };
+  const decay = 1 - t / CORE_SHAKE_TIME;
+  return {
+    dx: Math.round(Math.sin(t * CORE_SHAKE_HZ * Math.PI * 2) * CORE_SHAKE_PX * decay),
+    dy: t < 0.06 ? 1 : 0,
+  };
+}
+
 function drawCoreSprite(ctx, core, state, hpRatio) {
   const C = CORE_SPRITE;
   const k = ctx.getTransform().a;
-  const x = Math.round((core.x - C.anchorX) * k) / k;
-  const y = Math.round((core.y - C.anchorY) * k) / k;
+  const sh = coreShake(state);
+  const x = Math.round((core.x - C.anchorX + sh.dx) * k) / k;
+  const y = Math.round((core.y - C.anchorY + sh.dy) * k) / k;
   ctx.save();
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(C.img, x, y);
-  const sy = core.y - C.anchorY + C.starY;   // 별 문양 가운데
+  const sy = core.y - C.anchorY + C.starY + sh.dy;   // 별 문양 가운데 (숫자도 같이 흔들림)
   ctx.restore();
-  const low = hpRatio <= 0.3;   // 30% 이하면 숫자를 붉게
+  // 남은 HP가 CORE_HP_LOW 이하면 현재 HP 숫자만 붉게, ' / 최대'는 흰색 그대로
+  const font = 'bold 12px Galmuri11, sans-serif';
+  const cur = `${state.coreHp}`, rest = ` / ${state.maxCoreHp}`;
+  ctx.font = font;
+  const wCur = ctx.measureText(cur).width, wAll = ctx.measureText(cur + rest).width;
+  const left = core.x + sh.dx - wAll / 2;
   ctx.lineWidth = 1;
-  drawLabel(ctx, `${state.coreHp} / ${state.maxCoreHp}`, core.x, sy + 1,
-    low ? COLORS.coreHpLow : COLORS.text, 'bold 12px Galmuri11, sans-serif');
+  drawLabel(ctx, cur, left + wCur / 2, sy + 1, state.coreHp <= CORE_HP_LOW ? COLORS.coreHpLow : COLORS.text, font);
+  drawLabel(ctx, rest, left + wCur + (wAll - wCur) / 2, sy + 1, COLORS.text, font);
 }
+const CORE_HP_LOW = 50;   // 거점 HP가 이 값 이하면 숫자를 붉게
 
 function loadFxSheets() {
   for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, SLAM_FX, BITE_FX, REMNANT_FX, CORE_SPRITE]) {
@@ -2064,7 +2253,48 @@ const game = {
   toastTimer: null,
   lastTime: null,
   accumulator: 0,
+  save: null,          // 챕터 진행 저장 (createEmptySave 모양). 브라우저 저장소와 같은 내용
+  lastStatus: null,    // 상태가 바뀌는 순간(웨이브 클리어·승리·패배)을 잡아 저장하기 위함
+  clearInfo: null,     // 방금 챕터를 클리어한 결과 (최고 기록·해금 안내용)
+  screen: 'title',     // READY 상태에서 보여줄 화면: 'title' | 'chapters'
+  confirmRestartId: null,   // '처음부터'를 한 번 누른 챕터 (한 번 더 누르면 진행 삭제 후 시작)
 };
+
+/* ---------- 브라우저 저장소 (localStorage) ----------
+ * 사생활 보호 모드·저장소 차단 등으로 읽기/쓰기가 실패해도 게임은 그대로 진행 (그때는 저장되지 않음) */
+const SAVE_KEY = 'arise-defense-save';
+
+function loadSave() {
+  try {
+    const text = window.localStorage.getItem(SAVE_KEY);
+    return normalizeSave(text ? JSON.parse(text) : null);
+  } catch (err) {
+    console.warn('[저장 불러오기 실패]', err);
+    return createEmptySave();
+  }
+}
+
+function persistSave() {
+  try {
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify(game.save));
+  } catch (err) {
+    console.warn('[저장 실패]', err);
+  }
+}
+
+// 상태가 바뀐 순간 한 번: 웨이브 클리어 → 이어하기 저장, 챕터 클리어 → 기록·해금, 패배 → 이어하기 삭제
+function onStatusChanged(st) {
+  if (st.status === STATUS.WAVE_CLEAR) {
+    game.save.resume[st.chapterId] = serializeRun(st);
+    persistSave();
+  } else if (st.status === STATUS.VICTORY) {
+    game.clearInfo = recordChapterClear(game.save, st);
+    persistSave();
+  } else if (st.status === STATUS.DEFEAT) {
+    delete game.save.resume[st.chapterId];
+    persistSave();
+  }
+}
 
 function $(id) { return document.getElementById(id); }
 
@@ -2227,17 +2457,95 @@ function onExtract() {
   }
 }
 
-function newGame() {
-  game.state = createInitialState();
+// 챕터를 처음(웨이브 1)부터 시작. 그 챕터의 이어하기 진행은 지워짐
+function newGame(chapterId = game.state.chapterId) {
+  delete game.save.resume[chapterId];
+  persistSave();
+  setGameState(createInitialState(chapterId));
   setStatus(game.state, STATUS.PREPARATION);
+  game.lastStatus = game.state.status;
+}
+
+// 저장된 진행(마지막으로 클리어한 웨이브 다음)부터 이어서 시작
+function resumeChapter(chapterId) {
+  const run = game.save.resume[chapterId];
+  if (!run) { newGame(chapterId); return; }
+  setGameState(restoreRun(run));
+  showToast(`챕터 ${chapterId} · WAVE ${game.state.wave}부터 이어합니다`, 'ok');
+}
+
+function setGameState(state) {
+  game.state = state;
+  game.lastStatus = state.status;
   game.accumulator = 0;
+  game.clearInfo = null;
+  game.confirmRestartId = null;
   hideToast();   // 이전 판의 메시지가 남지 않도록
 }
 
+// 챕터 선택 화면 (READY). 진행 중이던 판은 버림 — 이어하기는 마지막으로 클리어한 웨이브 기준
+function goToChapters() {
+  setGameState(createInitialState(game.state ? game.state.chapterId : undefined));
+  game.screen = 'chapters';
+  buildChapterList();
+}
+
 function goToTitle() {
-  game.state = createInitialState();   // READY
-  game.accumulator = 0;
-  hideToast();
+  setGameState(createInitialState(game.state ? game.state.chapterId : undefined));
+  game.screen = 'title';
+}
+
+// 챕터 카드 목록: 잠김 / 도전 가능 / 진행 중(이어하기) / 클리어(최고 기록)
+function buildChapterList() {
+  const list = game.ui.chapterList;
+  const save = game.save;
+  const maxHp = GAME_DATA.config.coreHp;
+  list.innerHTML = '';
+  GAME_DATA.chapters.forEach((ch, i) => {
+    const id = ch.chapterId;
+    const unlocked = isChapterUnlocked(save, id);
+    const cleared = save.cleared[id];
+    const run = save.resume[id];
+    const card = document.createElement('div');
+    card.className = 'chapter-card' + (unlocked ? '' : ' locked') + (cleared ? ' cleared' : '') + (run ? ' progress' : '');
+    const badge = !unlocked ? '잠김' : run ? '진행 중' : cleared ? '클리어' : '도전 가능';
+    const lines = [`웨이브 ${ch.waves.length}개`];
+    if (cleared) lines.push(`최고 기록 · 거점 HP ${cleared.best.coreHp}/${maxHp} · 처치 ${cleared.best.kills}`);
+    const prev = GAME_DATA.chapters[i - 1];
+    let buttons;
+    if (!unlocked) {
+      buttons = `<button type="button" class="btn-secondary" disabled>챕터 ${prev.chapterId} 클리어 시 해금</button>`;
+    } else if (run) {
+      const confirming = game.confirmRestartId === id;
+      buttons = `<button type="button" class="btn-secondary" data-action="restart" data-chapter="${id}">${confirming ? '정말 처음부터?' : '처음부터'}</button>` +
+        `<button type="button" class="btn-primary" data-action="resume" data-chapter="${id}">이어하기</button>`;
+    } else {
+      buttons = `<button type="button" class="btn-primary" data-action="start" data-chapter="${id}">${cleared ? '다시 도전' : '시작'}</button>`;
+    }
+    card.innerHTML =
+      `<div class="chapter-head"><span class="chapter-no">CHAPTER ${id}</span><span class="chapter-badge">${badge}</span></div>` +
+      `<h3 class="chapter-name">${ch.name}</h3>` +
+      `<p class="chapter-desc">${ch.desc}</p>` +
+      lines.map((t) => `<p class="chapter-info">${t}</p>`).join('') +
+      (run ? `<p class="chapter-info resume">WAVE ${run.wave}부터 이어하기 · 거점 HP ${run.coreHp}/${maxHp}</p>` : '') +
+      `<div class="chapter-buttons">${buttons}</div>`;
+    list.appendChild(card);
+  });
+}
+
+function onChapterListClick(evt) {
+  const btn = evt.target.closest('button[data-action]');
+  if (!btn || btn.disabled) return;
+  const id = Number(btn.dataset.chapter);
+  if (!isChapterUnlocked(game.save, id)) return;
+  const action = btn.dataset.action;
+  if (action === 'resume') resumeChapter(id);
+  else if (action === 'start') newGame(id);
+  else if (action === 'restart') {
+    // 진행 중인 챕터를 처음부터: 한 번 더 눌러야 진행이 지워짐
+    if (game.confirmRestartId === id) newGame(id);
+    else { game.confirmRestartId = id; buildChapterList(); }
+  }
 }
 
 function onStartWave() {
@@ -2247,7 +2555,13 @@ function onStartWave() {
 function onResultPrimary() {
   const st = game.state;
   if (st.status === STATUS.WAVE_CLEAR) goToNextWave(st);
-  else if (st.status === STATUS.VICTORY || st.status === STATUS.DEFEAT) newGame();
+  else if (st.status === STATUS.VICTORY) {
+    const next = getNextChapter(st.chapterId);
+    if (next && isChapterUnlocked(game.save, next.chapterId)) {
+      if (game.save.resume[next.chapterId]) resumeChapter(next.chapterId);
+      else newGame(next.chapterId);
+    } else newGame(st.chapterId);
+  } else if (st.status === STATUS.DEFEAT) newGame(st.chapterId);
 }
 
 function onPause() {
@@ -2383,14 +2697,16 @@ function syncUI() {
   const C = GAME_DATA.config;
   consumeEvents(st);
 
-  setText(ui.wave, `${st.wave} / ${GAME_DATA.waves.length}`);
+  setText(ui.chapter, `챕터 ${st.chapterId}`);
+  setText(ui.wave, `${st.wave} / ${getWaveCount(st)}`);
   setText(ui.energy, `${st.energy} / ${st.maxEnergy}`);
-  setText(ui.core, `${st.coreHp} / ${st.maxCoreHp}`);
+  setText(ui.coreCur, `${st.coreHp}`);
+  setText(ui.coreMax, `${st.maxCoreHp}`);
   setText(ui.army, `${countArmy(st)} / ${C.maxArmy}`);
   setText(ui.armyBasic, `기본 ${countBasic(st)}/${C.maxBasic}`);
   setText(ui.status, STATUS_TEXT[st.status]);
   setText(ui.hint, hintText(st));
-  ui.core.classList.toggle('danger', st.coreHp <= st.maxCoreHp * 0.3);
+  ui.coreCur.classList.toggle('danger', st.coreHp <= CORE_HP_LOW);   // 거점 위 숫자와 같은 기준
 
   const basicFull = countBasic(st) >= C.maxBasic || countArmy(st) >= C.maxArmy;
   for (const btn of ui.cards.children) {
@@ -2408,27 +2724,42 @@ function syncUI() {
 
   setHidden(ui.overlayPause, st.status !== STATUS.PAUSED);
   if (st.status === STATUS.PAUSED) {
-    setText(ui.pauseStats, `WAVE ${st.wave} · 처치 ${st.stats.waveKills} · 군단 ${countArmy(st)}/${C.maxArmy} · 거점 HP ${st.coreHp}/${st.maxCoreHp} · 에너지 ${st.energy}`);
+    setText(ui.pauseStats, `챕터 ${st.chapterId} · WAVE ${st.wave} · 처치 ${st.stats.waveKills} · 군단 ${countArmy(st)}/${C.maxArmy} · 거점 HP ${st.coreHp}/${st.maxCoreHp} · 에너지 ${st.energy}`);
   }
 
-  setHidden(ui.overlayTitle, st.status !== STATUS.READY);
+  setHidden(ui.overlayTitle, st.status !== STATUS.READY || game.screen !== 'title');
+  setHidden(ui.overlayChapters, st.status !== STATUS.READY || game.screen !== 'chapters');
   const showResult = st.status === STATUS.WAVE_CLEAR || st.status === STATUS.VICTORY || st.status === STATUS.DEFEAT;
   setHidden(ui.overlayResult, !showResult);
   if (showResult) {
     const s = st.stats;
+    let extra = '';
     if (st.status === STATUS.WAVE_CLEAR) {
       setText(ui.resultTitle, '웨이브 방어 성공');
-      setText(ui.resultDesc, `WAVE ${st.wave} 클리어 · 처치 ${s.waveKills} · 군단 ${countArmy(st)}/${C.maxArmy} · 거점 HP ${st.coreHp}/${st.maxCoreHp}`);
+      setText(ui.resultDesc, `챕터 ${st.chapterId} · WAVE ${st.wave} 클리어 · 처치 ${s.waveKills} · 군단 ${countArmy(st)}/${C.maxArmy} · 거점 HP ${st.coreHp}/${st.maxCoreHp}`);
       setText(ui.btnResultPrimary, '다음 웨이브 준비');
+      setText(ui.btnResultTitle, '저장하고 나가기');
+      extra = `진행 저장됨 · 챕터 선택에서 WAVE ${st.wave + 1}부터 이어할 수 있습니다`;
     } else if (st.status === STATUS.VICTORY) {
-      setText(ui.resultTitle, '던전 방어 성공!');
+      const info = game.clearInfo || {};
+      const next = getNextChapter(st.chapterId);
+      setText(ui.resultTitle, `챕터 ${st.chapterId} 클리어!`);
       setText(ui.resultDesc, `전 웨이브 클리어 · 총 처치 ${s.kills} · 추출 ${s.extractionSuccesses} · 거점 HP ${st.coreHp}/${st.maxCoreHp}`);
-      setText(ui.btnResultPrimary, '다시 도전');
+      setText(ui.btnResultPrimary, next ? '다음 챕터' : '다시 도전');
+      setText(ui.btnResultTitle, '챕터 선택');
+      const parts = [];
+      if (info.unlockedNext) parts.push(`챕터 ${info.unlockedNext.chapterId} 「${info.unlockedNext.name}」 해금!`);
+      if (info.newRecord && !info.firstClear) parts.push('최고 기록 갱신!');
+      if (!next) parts.push('모든 챕터를 클리어했습니다');
+      extra = parts.join(' · ');
     } else {
       setText(ui.resultTitle, '던전 방어 실패');
-      setText(ui.resultDesc, `WAVE ${st.wave}에서 거점 파괴 · 총 처치 ${s.kills} · 추출 ${s.extractionSuccesses}`);
+      setText(ui.resultDesc, `챕터 ${st.chapterId} · WAVE ${st.wave}에서 거점 파괴 · 총 처치 ${s.kills} · 추출 ${s.extractionSuccesses}`);
       setText(ui.btnResultPrimary, '다시 도전');
+      setText(ui.btnResultTitle, '챕터 선택');
     }
+    setText(ui.resultExtra, extra);
+    setHidden(ui.resultExtra, !extra);
     ui.overlayResult.dataset.kind = st.status.toLowerCase();
   }
 }
@@ -2457,6 +2788,10 @@ function frame(now) {
     steps += 1;
   }
   if (steps >= 30) game.accumulator = 0;
+  if (game.state.status !== game.lastStatus) {
+    game.lastStatus = game.state.status;
+    onStatusChanged(game.state);
+  }
 
   render(game.ctx, game.state, game.view);
   syncUI();
@@ -2477,7 +2812,7 @@ function boot() {
   game.canvas = $('field');
   game.ctx = game.canvas.getContext('2d');
   game.ui = {
-    wave: $('hud-wave'), energy: $('hud-energy'), core: $('hud-core'), army: $('hud-army'),
+    chapter: $('hud-chapter'), wave: $('hud-wave'), energy: $('hud-energy'), coreCur: $('hud-core-cur'), coreMax: $('hud-core-max'), army: $('hud-army'),
     armyBasic: $('hud-army-basic'), status: $('hud-status'),
     hint: $('hint'), toast: $('toast'), cards: $('shadow-cards'), btnStart: $('btn-start-wave'),
     extractPanel: $('extract-panel'), extractName: $('extract-name'), extractStats: $('extract-stats'),
@@ -2485,12 +2820,14 @@ function boot() {
     unitPanel: $('unit-panel'), unitKind: $('unit-kind'), unitName: $('unit-name'), unitStats: $('unit-stats'),
     unitState: $('unit-state'), unitRefund: $('unit-refund'), unitActions: $('unit-actions'), unitConfirm: $('unit-confirm'),
     overlayTitle: $('overlay-title'), overlayResult: $('overlay-result'),
-    resultTitle: $('result-title'), resultDesc: $('result-desc'),
-    btnResultPrimary: $('btn-result-primary'),
+    resultTitle: $('result-title'), resultDesc: $('result-desc'), resultExtra: $('result-extra'),
+    btnResultPrimary: $('btn-result-primary'), btnResultTitle: $('btn-result-title'),
+    overlayChapters: $('overlay-chapters'), chapterList: $('chapter-list'),
     btnPause: $('btn-pause'), overlayPause: $('overlay-pause'), pauseStats: $('pause-stats'),
   };
 
-  game.state = createInitialState();
+  game.save = loadSave();
+  setGameState(createInitialState());
   buildShadowCards();
 
   // 맵 디자인 이미지. 불러오기 전·실패 시에는 기본 배경으로 그림
@@ -2508,7 +2845,9 @@ function boot() {
   game.canvas.addEventListener('mousemove', onMouseMove);
   game.canvas.addEventListener('mouseleave', onMouseLeave);
   $('app').addEventListener('contextmenu', onSecondaryClick);   // 기본 그림자 위: 회수 / 그 밖: 선택 해제
-  $('btn-play').addEventListener('click', newGame);
+  $('btn-play').addEventListener('click', goToChapters);
+  game.ui.chapterList.addEventListener('click', onChapterListClick);
+  $('btn-chapters-back').addEventListener('click', goToTitle);
   game.ui.btnStart.addEventListener('click', onStartWave);
   game.ui.btnExtract.addEventListener('click', onExtract);
   $('btn-extract-cancel').addEventListener('click', () => { game.state.selectedRemnantUid = null; });
@@ -2517,11 +2856,11 @@ function boot() {
   $('btn-dismantle-cancel').addEventListener('click', () => { game.view.confirmDismantleUid = null; });   // 변화 없음
   $('btn-dismantle-confirm').addEventListener('click', onDismantleConfirm);
   game.ui.btnResultPrimary.addEventListener('click', onResultPrimary);
-  $('btn-result-title').addEventListener('click', goToTitle);
+  game.ui.btnResultTitle.addEventListener('click', goToChapters);   // 웨이브 클리어 화면에서는 '저장하고 나가기'
   game.ui.btnPause.addEventListener('click', onPause);
   $('btn-resume').addEventListener('click', onResume);
-  $('btn-pause-restart').addEventListener('click', newGame);   // 모든 그림자·적·잔영·타이머 초기화
-  $('btn-pause-title').addEventListener('click', goToTitle);
+  $('btn-pause-restart').addEventListener('click', () => newGame());   // 이 챕터를 웨이브 1부터 (이어하기 진행 삭제)
+  $('btn-pause-title').addEventListener('click', goToChapters);   // 이어하기는 마지막으로 클리어한 웨이브부터
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('resize', fitCanvasToScreen);
   fitCanvasToScreen();
