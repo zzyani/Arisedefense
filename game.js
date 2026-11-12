@@ -103,6 +103,7 @@ function createInitialState(chapterId = GAME_DATA.chapters[0].chapterId, availab
     enemies: [],
     remnants: [],
     effects: [],              // 공격 선 표시 (연출용, 게임 규칙에 영향 없음)
+    pendingHits: [],          // 늦게 들어가는 피해 (어금니 마력구처럼 날아가 닿을 때): { uid, dmg, at }
     corpses: [],              // 사망 애니메이션 표시 (연출용)
     events: [],               // 규칙 → UI 알림 (예: 선택한 잔영 만료). UI가 매 프레임 비움
     spawnIndex: 0,
@@ -971,6 +972,18 @@ function updateCooldowns(state, dt) {
 
 function processShadowAttacks(state) {
   const killed = [];
+  // 늦게 들어가는 피해: 마력구가 닿는 시각이 되면 그때 대상에게 피해 (그 사이 죽은 대상은 건너뜀)
+  if (state.pendingHits.length) {
+    state.pendingHits = state.pendingHits.filter((h) => {
+      if (state.elapsed < h.at) return true;
+      const t = state.enemies.find((e) => e.uid === h.uid);
+      if (t && t.alive) {
+        if (applyDamage(t, h.dmg)) killed.push(t);
+        t.hitAt = state.elapsed;
+      }
+      return false;
+    });
+  }
   // 기본 그림자: 제자리에서 사거리 내 적 공격
   for (const u of state.basicUnits) {
     if (!u.alive || u.cooldown > 0) continue;
@@ -978,10 +991,15 @@ function processShadowAttacks(state) {
     if (targets.length === 0) continue;   // 대상이 없으면 쿨타임 0 유지 → 대상이 오면 즉시 공격
     const dmg = calcDamage(u.attack);
     faceToward(u, targets[0].x);   // 그림 방향(표시 전용)
-    const fxStyle = findShadowData(u.typeId).attackFx;
+    const sd = findShadowData(u.typeId);
+    const fxStyle = sd.attackFx;
+    const delay = sd.hitDelay || 0;   // 있으면 공격 이펙트가 닿는 때에 피해 (어금니 마력구)
     targets.forEach((t, ti) => {
-      if (applyDamage(t, dmg)) killed.push(t);
-      t.hitAt = state.elapsed;   // 피격 애니메이션용
+      if (delay > 0) state.pendingHits.push({ uid: t.uid, dmg, at: state.elapsed + delay });
+      else {
+        if (applyDamage(t, dmg)) killed.push(t);
+        t.hitAt = state.elapsed;   // 피격 애니메이션용
+      }
       // 이펙트 그림은 유닛 앞에 1번만 (범위 공격이라도 겹쳐 그리지 않음). 이펙트가 없으면 대상마다 공격 선
       if (!fxStyle || ti === 0) {
         const fx = addEffect(state, u.x, u.y, t.x, t.y, 'shadow', fxStyle);
@@ -989,6 +1007,7 @@ function processShadowAttacks(state) {
         fx.radius = u.targetType === 'splash' ? u.splashRadius : u.targetType === 'line' ? 30 : u.attackRange;   // 폭발 원 크기 (blast, 브레스 그림이 없을 때 대신)
         fx.atTarget = u.targetType === 'splash' || u.targetType === 'line';   // 맞은 적 위에서 폭발
         fx.maxTilt = u.lineMaxTilt;   // 브레스 그림 각도 (피해 줄기와 같게)
+        if (delay > 0) { fx.hitDelay = delay; fx.targetUid = t.uid; fx.life = fx.ttl = delay + ORB_IMPACT_TIME; }   // 이펙트가 피해 시각에 대상에게 닿고 잠깐 터짐
       }
     });
     u.attackAt = state.elapsed;
@@ -1106,7 +1125,8 @@ function checkWaveComplete(state) {
 
 // 공격 연출 (게임 규칙에 영향 없음). style: 없으면 공격 선, 'claw'면 할퀴기 자국
 const LINE_FX_TIME = 0.12;
-const ATTACK_FX_TIME = { claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36, bolt: 0.28, blast: 0.4, breath: 0.55 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
+const ATTACK_FX_TIME = { claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36, bolt: 0.28, blast: 0.4, breath: 0.55, orb: 0.56 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
+const ORB_IMPACT_TIME = 0.18;   // 마력구가 닿은 뒤 터지며 흩어지는 시간(초)
 function addEffect(state, x1, y1, x2, y2, kind, style) {
   const ttl = ATTACK_FX_TIME[style] || LINE_FX_TIME;
   const fx = { x1, y1, x2, y2, kind, style, ttl, life: ttl };
@@ -1154,6 +1174,7 @@ function validateGameData(data) {
     if (!['single', 'all_in_range', 'splash', 'line'].includes(s.targetType)) errors.push(`shadows ${s.id}: targetType은 single · all_in_range · splash · line 입니다.`);
     if (s.targetType === 'splash' && !isPos(s.splashRadius)) errors.push(`shadows ${s.id}: splash 공격은 splashRadius가 필요합니다.`);
     if (s.targetType === 'line' && !(isPos(s.lineLength) && isPos(s.lineWidth))) errors.push(`shadows ${s.id}: line 공격은 lineLength·lineWidth가 필요합니다.`);
+    if (s.hitDelay !== undefined && !(s.hitDelay >= 0 && s.hitDelay < s.attackInterval)) errors.push(`shadows ${s.id}: hitDelay는 0 이상, 공격 간격보다 짧아야 합니다.`);
     if (s.unlockAfterChapter !== undefined && !(data.chapters || []).some((ch) => ch.chapterId === s.unlockAfterChapter)) errors.push(`shadows ${s.id}: unlockAfterChapter ${s.unlockAfterChapter} 챕터가 없습니다.`);
   }
   const extraCards = data.shadows.filter((s) => s.unlockAfterChapter !== undefined).length;
@@ -1394,6 +1415,23 @@ const SPRITES = {
       attack: { row: 2, frames: 5, fps: 9, strikeFrame: 3, strikeHold: ATTACK_FX_TIME.breath - 1 / 9, groundY: 69 },
       hit:    { row: 3, frames: 2, fps: 10, groundY: 69 },
       death:  { row: 4, frames: 5, fps: 8, groundY: 69 },
+    },
+  },
+  SH_004: {   // 어금니 (마법사). 프레임마다 붉은 가면 가운데 x·옷자락 끝을 맞춰 100×68 칸으로 정렬 (원본 흰 테두리 정리)
+    src: 'assets/sprites/sh_004.png',   // 원본이 이미 보랏빛이라 색은 그대로 (붉은 가면·손은 원본)
+    cellW: 100, cellH: 68,
+    scale: 1,
+    glow: true,       // 그림자 유닛: 보랏빛 윤곽 빛
+    anchorX: 56,      // 칸 안에서 가면 가운데 x
+    bodyTop: 4,       // 머리 뒤 촉수 끝 높이 (HP바 위치)
+    shadow: { w: 20, h: 4, dx: -2, op: 1.2 },
+    anims: {
+      idle:   { row: 0, frames: 4, fps: 5, groundY: 66 },
+      walk:   { row: 1, frames: 6, fps: 8, stride: 40, groundY: 66 },   // 기본 그림자는 제자리라 지금은 쓰지 않음
+      // 0~2 두 손을 모았다가 앞으로, 3 손을 뻗어 마력구를 모아 던짐(타격), 4 복귀. 3번은 마력구를 모으는 동안 유지
+      attack: { row: 2, frames: 5, fps: 9, strikeFrame: 3, strikeHold: 0.22, groundY: 66 },
+      hit:    { row: 3, frames: 2, fps: 10, groundY: 66 },
+      death:  { row: 4, frames: 5, fps: 8, groundY: 66 },
     },
   },
   SH_002: {   // 이그리트 (기본 그림자: 제자리 고정이라 이동 동작 없음)
@@ -2178,6 +2216,59 @@ function drawBreathFx(ctx, fx) {
   ctx.restore();
   return true;
 }
+// 어금니 마력구 (assets/sprites/fx_orb.png, 80×72 칸 7프레임 × 2줄): 줄 0 = 손끝에서 모으기, 줄 1 = 날아가기 → 터지며 흩어짐.
+// 뻗은 손 앞에서 구슬이 커진 뒤 맞은 적(몸통 높이)까지 날아가 터짐. 날아가는 방향으로 그림을 돌림.
+// 피해는 데이터 hitDelay(초) 뒤 구슬이 닿는 순간에 들어감
+const ORB_FX = {
+  src: 'assets/sprites/fx_orb.png', w: 80, h: 72,
+  handReach: 20,     // 어금니 판정 위치에서 바라보는 쪽으로 손끝 앞까지(px) = 공격 3번째 프레임의 뻗은 손 (칸 x 76)
+  handLift: 25,      // 판정 위치에서 위로 손 높이(px) = 칸 y 29 (발끝 y 66은 판정 위치 아래 12px)
+  charge: 0.18,      // 모으기 시간(초): 줄 0의 0~5번 프레임. 날아가는 시간 = 피해 시각(hitDelay) - 모으기 (줄 1의 0~3번 반복)
+  chargeScale: 0.6, flyScale: 0.85,
+  headX: 62, headY: 36,   // 줄 1 칸 안에서 구슬 머리 위치 (꼬리는 왼쪽)
+  glow: 'rgba(190, 120, 255, 0.6)',
+};
+function drawOrbFx(ctx, fx, state) {
+  const O = ORB_FX;
+  if (!O.img) return false;
+  const t = fx.life - fx.ttl;
+  const dir = fx.facing || (fx.x2 >= fx.x1 ? 1 : -1);
+  const hx = fx.x1 + dir * O.handReach, hy = fx.y1 - O.handLift;
+  // 날아가는 동안 대상이 움직이면 따라감 (닿을 때까지). 닿은 뒤에는 그 자리에서 터짐
+  const tgt = state && fx.targetUid !== undefined && t < (fx.hitDelay || 0) ? state.enemies.find((e) => e.uid === fx.targetUid && e.alive) : null;
+  if (tgt) { fx.x2 = tgt.x; fx.y2 = tgt.y; }
+  const tx = fx.x2, ty = fx.y2 - 8;   // 맞은 적 몸통 높이
+  const ang = Math.atan2(ty - hy, tx - hx);
+  const charge = Math.min(O.charge, (fx.hitDelay || 0.38) * 0.5);
+  const flyT = Math.max(0.05, (fx.hitDelay || 0.38) - charge);   // 피해가 들어가는 순간 구슬이 적에게 닿음
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.shadowColor = O.glow;
+  ctx.shadowBlur = 6;
+  if (t < charge) {                         // 1) 손끝에서 모으기
+    const f = Math.min(5, Math.floor(t / charge * 6));
+    ctx.translate(hx, hy);
+    ctx.scale(O.chargeScale, O.chargeScale);
+    ctx.drawImage(O.img, f * O.w, 0, O.w, O.h, -O.w / 2, -O.h / 2, O.w, O.h);
+  } else {
+    const u = (t - charge) / flyT;
+    let x = tx, y = ty, f;
+    if (u < 1) {                            // 2) 날아가기 (꼬리 달린 구슬)
+      x = hx + (tx - hx) * u; y = hy + (ty - hy) * u;
+      f = Math.floor(u * 4) % 4;
+    } else {                                // 3) 맞은 자리에서 터지며 흩어짐
+      const rest = Math.max(0.001, fx.life - charge - flyT);
+      f = 4 + Math.min(2, Math.floor((t - charge - flyT) / rest * 3));
+    }
+    ctx.translate(x, y);
+    ctx.rotate(ang);
+    if (Math.abs(ang) > Math.PI / 2) ctx.scale(1, -1);   // 왼쪽으로 날아갈 때 그림이 뒤집혀 보이지 않게
+    ctx.scale(O.flyScale, O.flyScale);
+    ctx.drawImage(O.img, f * O.w, O.h, O.w, O.h, -O.headX, -O.headY, O.w, O.h);
+  }
+  ctx.restore();
+  return true;
+}
 const ATTACK_FX = { claw: CLAW_FX, slash: SLASH_FX, ice: ICE_FX, bearclaw: BEARCLAW_FX, slam: SLAM_FX, bite: BITE_FX };
 
 // 잔영 (assets/sprites/remnant.png): 보랏빛 그림자 불꽃 6프레임 반복. 파일이 없으면 기존 원형으로 그림
@@ -2476,7 +2567,7 @@ function drawCoreSprite(ctx, core, state, C) {
 const CORE_HP_LOW = 50;   // 거점 HP가 이 값 이하면 숫자를 붉게
 
 function loadFxSheets() {
-  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, SLAM_FX, BITE_FX, BREATH_FX, REMNANT_FX, DEMON_WINDOWS, ANT_GLOW, ...Object.values(CORE_SPRITES)]) {
+  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, SLAM_FX, BITE_FX, BREATH_FX, ORB_FX, REMNANT_FX, DEMON_WINDOWS, ANT_GLOW, ...Object.values(CORE_SPRITES)]) {
     const img = new Image();
     img.onload = () => { fx.img = fx.shade ? buildTintedSheet(img, fx.shade) : img; };
     img.onerror = () => console.warn(`[이펙트 불러오기 실패] ${fx.src}`);
@@ -2845,6 +2936,10 @@ function render(ctx, state, view) {
   // 공격 선 / 할퀴기 자국
   for (const fx of state.effects) {
     if (PROC_FX[fx.style]) { PROC_FX[fx.style](ctx, fx); continue; }   // 그림 없이 코드로 그리는 탄환·폭발
+    if (fx.style === 'orb') {      // 어금니 마력구 (그림이 없으면 탄환으로 대신)
+      if (drawOrbFx(ctx, fx, state)) continue;
+      PROC_FX.bolt(ctx, fx); continue;
+    }
     if (fx.style === 'breath') {   // 카이셀 브레스 (그림이 없으면 폭발 원으로 대신)
       if (drawBreathFx(ctx, fx)) continue;
       PROC_FX.blast(ctx, fx); continue;
