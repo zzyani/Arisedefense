@@ -378,6 +378,35 @@ button { font-family: inherit; }
 }
 .card.poor { opacity: 0.45; }
 
+/* 잠긴 카드: 어둡게 덮고 가운데 자물쇠 + 해금 조건. 누를 수 없음 (선택하면 안내만) */
+.card.locked { cursor: not-allowed; }
+.card.locked .card-role,
+.card.locked .card-stats,
+.card.locked .card-cost { visibility: hidden; }   /* 해금 전에는 이름만 흐리게 보이고 능력치는 숨김 (자리는 그대로) */
+.card.locked:hover { transform: none; }
+.card.locked::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(4, 6, 14, 0.74);
+  pointer-events: none;
+}
+.card-lock {
+  position: absolute;
+  inset: 0;
+  padding-top: 8px;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: #c9cfe6;
+  pointer-events: none;
+}
+.card-lock .lock-icon { filter: drop-shadow(0 0 4px rgba(150, 170, 255, 0.35)); }
+.card-lock-text { font-size: 11px; color: #aab2d4; text-shadow: 0 1px 0 #000; }
+
 /* 카드 배경 그림: 왼쪽(텍스트 쪽)은 짙게 덮어 글자가 잘 보이게, 오른쪽(캐릭터 얼굴 쪽)은 거의 그대로 */
 .card.has-art {
   background-image:

@@ -140,8 +140,12 @@ function findExtractionData(id) { return GAME_DATA.extraction.units.find((u) => 
 // 처음부터 쓰는 카드 (unlockAfterChapter 없음)
 function baseShadowIds() { return GAME_DATA.shadows.filter((s) => !s.unlockAfterChapter).map((s) => s.id); }
 // 저장 기록 기준 쓸 수 있는 카드: 기본 카드 + 해금 챕터를 클리어한 카드
+// 챕터를 클리어한 것으로 보는지: 저장 기록이 있거나, 테스트 설정 clearAllChapters가 켜져 있으면 (저장에는 쓰지 않음)
+function isChapterCleared(save, chapterId) {
+  return !!GAME_DATA.config.clearAllChapters || !!(save && save.cleared[chapterId]);
+}
 function getUnlockedShadowIds(save) {
-  return GAME_DATA.shadows.filter((s) => !s.unlockAfterChapter || (save && save.cleared[s.unlockAfterChapter])).map((s) => s.id);
+  return GAME_DATA.shadows.filter((s) => !s.unlockAfterChapter || isChapterCleared(save, s.unlockAfterChapter)).map((s) => s.id);
 }
 function maxBasicFor(shadowIds) {
   const extra = shadowIds.filter((id) => { const d = findShadowData(id); return d && d.unlockAfterChapter; }).length;
@@ -330,6 +334,9 @@ function makeBasicUnit(state, d, x, y) {
     attackRange: d.attackRange,
     targetType: d.targetType,
     splashRadius: d.splashRadius || 0,
+    lineLength: d.lineLength || 0,   // line: 줄기 길이 (유닛 위치부터)
+    lineWidth: d.lineWidth || 0,     // line: 줄기 폭
+    lineMaxTilt: d.lineMaxTilt || 0, // line: 위아래로 꺾이는 최대 각도(라디안, 0이면 제한 없음)
     cooldown: 0,          // 생성 직후 첫 공격 가능
     alive: true,
     energyCostPaid: d.cost, // 실제 소비 에너지 → 회수·해체 반환 기준
@@ -566,7 +573,28 @@ function findBasicTargets(state, unit) {
   if (unit.targetType === 'splash') {   // 첫 대상 + 그 주변 splashRadius 안의 적 (사거리 밖이어도 폭발에 휘말림)
     return [main].concat(state.enemies.filter((e) => e.alive && e !== main && dist(e.x, e.y, main.x, main.y) <= unit.splashRadius));
   }
+  if (unit.targetType === 'line') {     // 카이셀 브레스: 첫 대상 쪽으로 뻗는 줄기(길이 lineLength·폭 lineWidth)에 걸린 적 전부 (뒤쪽 적 포함)
+    return [main].concat(state.enemies.filter((e) => e.alive && e !== main && inLine(unit, main, e, unit.lineLength, unit.lineWidth, unit.lineMaxTilt)));
+  }
   return [main];
+}
+
+// 줄기 방향: 유닛이 바라보는 쪽(대상이 있는 좌우) 기준 위아래 각도를 maxTilt 안으로 부드럽게 눌러 줌
+// (가까운 적에게 급하게 꺾이지 않게. 브레스 그림도 같은 방식이라 보이는 줄기와 피해 줄기가 같음)
+function lineDir(dx, dy, maxTilt) {
+  const side = dx < 0 ? -1 : 1;
+  let rel = Math.atan2(dy, Math.abs(dx));
+  if (maxTilt) rel = maxTilt * Math.tanh(rel / maxTilt);
+  return { ux: side * Math.cos(rel), uy: Math.sin(rel) };
+}
+// 유닛(from)에서 대상(toward) 쪽으로 뻗는 길이 len·폭 width의 줄기에 적 e가 걸리는지 (몸 반경까지 포함)
+function inLine(from, toward, e, len, width, maxTilt) {
+  const { ux, uy } = lineDir(toward.x - from.x, toward.y - from.y, maxTilt);
+  const ex = e.x - from.x, ey = e.y - from.y;
+  const along = ex * ux + ey * uy;                 // 줄기 방향으로 얼마나 앞인지
+  const side = Math.abs(ex * uy - ey * ux);        // 줄기에서 옆으로 얼마나 떨어졌는지
+  const r = e.radius || 0;
+  return along >= -r && along <= len + r && side <= width / 2 + r;
 }
 
 // 적: 사거리 내 가장 가까운 그림자(기본·추출) → 동률이면 먼저 생성된 그림자
@@ -672,7 +700,7 @@ function isChapterUnlocked(save, chapterId) {
   const i = GAME_DATA.chapters.findIndex((c) => c.chapterId === chapterId);
   if (i < 0) return false;
   if (i === 0 || GAME_DATA.config.unlockAllChapters) return true;   // 테스트 설정: 전부 열림
-  return !!save.cleared[GAME_DATA.chapters[i - 1].chapterId];
+  return isChapterCleared(save, GAME_DATA.chapters[i - 1].chapterId);
 }
 
 function getNextChapter(chapterId) {
@@ -958,8 +986,9 @@ function processShadowAttacks(state) {
       if (!fxStyle || ti === 0) {
         const fx = addEffect(state, u.x, u.y, t.x, t.y, 'shadow', fxStyle);
         fx.facing = u.facing;
-        fx.radius = u.targetType === 'splash' ? u.splashRadius : u.attackRange;   // 폭발 원 크기 (blast)
-        fx.atTarget = u.targetType === 'splash';   // 카이셀: 맞은 적 위에서 폭발
+        fx.radius = u.targetType === 'splash' ? u.splashRadius : u.targetType === 'line' ? 30 : u.attackRange;   // 폭발 원 크기 (blast, 브레스 그림이 없을 때 대신)
+        fx.atTarget = u.targetType === 'splash' || u.targetType === 'line';   // 맞은 적 위에서 폭발
+        fx.maxTilt = u.lineMaxTilt;   // 브레스 그림 각도 (피해 줄기와 같게)
       }
     });
     u.attackAt = state.elapsed;
@@ -1077,7 +1106,7 @@ function checkWaveComplete(state) {
 
 // 공격 연출 (게임 규칙에 영향 없음). style: 없으면 공격 선, 'claw'면 할퀴기 자국
 const LINE_FX_TIME = 0.12;
-const ATTACK_FX_TIME = { claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36, bolt: 0.28, blast: 0.4 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
+const ATTACK_FX_TIME = { claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36, bolt: 0.28, blast: 0.4, breath: 0.55 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
 function addEffect(state, x1, y1, x2, y2, kind, style) {
   const ttl = ATTACK_FX_TIME[style] || LINE_FX_TIME;
   const fx = { x1, y1, x2, y2, kind, style, ttl, life: ttl };
@@ -1122,8 +1151,9 @@ function validateGameData(data) {
     for (const k of ['cost', 'maxHp', 'attack', 'attackInterval', 'attackRange']) {
       if (!isPos(s[k])) errors.push(`shadows ${s.id}: ${k} 값이 올바르지 않습니다 (${s[k]}).`);
     }
-    if (!['single', 'all_in_range', 'splash'].includes(s.targetType)) errors.push(`shadows ${s.id}: targetType은 single · all_in_range · splash 입니다.`);
+    if (!['single', 'all_in_range', 'splash', 'line'].includes(s.targetType)) errors.push(`shadows ${s.id}: targetType은 single · all_in_range · splash · line 입니다.`);
     if (s.targetType === 'splash' && !isPos(s.splashRadius)) errors.push(`shadows ${s.id}: splash 공격은 splashRadius가 필요합니다.`);
+    if (s.targetType === 'line' && !(isPos(s.lineLength) && isPos(s.lineWidth))) errors.push(`shadows ${s.id}: line 공격은 lineLength·lineWidth가 필요합니다.`);
     if (s.unlockAfterChapter !== undefined && !(data.chapters || []).some((ch) => ch.chapterId === s.unlockAfterChapter)) errors.push(`shadows ${s.id}: unlockAfterChapter ${s.unlockAfterChapter} 챕터가 없습니다.`);
   }
   const extraCards = data.shadows.filter((s) => s.unlockAfterChapter !== undefined).length;
@@ -1348,6 +1378,24 @@ const SPRITES = {
       death:  { row: 4, frames: 5, fps: 9, groundY: 60 },
     },
   },
+  SH_005: {   // 카이셀 (용). 프레임마다 꼬리 끝(왼쪽)·발끝을 맞춰 96×72 칸으로 정렬. 색은 이그리트 톤(보랏빛)에 맞춤
+    src: 'assets/sprites/sh_005.png',
+    cellW: 96, cellH: 72,
+    scale: 1,
+    glow: true,       // 그림자 유닛: 보랏빛 윤곽 빛
+    anchorX: 50,      // 칸 안에서 몸 가운데 x (앞뒤 발 사이)
+    bodyTop: 6,       // 뿔·날개 끝 높이 (HP바 위치)
+    shadow: { w: 30, h: 4, dx: 0, op: 1.3 },
+    anims: {
+      idle:   { row: 0, frames: 4, fps: 4, groundY: 69 },
+      walk:   { row: 1, frames: 6, fps: 8, stride: 44, groundY: 69 },   // 기본 그림자는 제자리라 지금은 쓰지 않음
+      // 0~2 고개를 들고 숨을 모음, 3 날개를 펴고 입을 벌려 브레스(타격, 원본의 작은 입김은 지우고 이펙트로 대신), 4 복귀
+      // 3번은 브레스가 나오는 동안 유지하고, 브레스가 사라지는 때에 맞춰 4번(복귀)으로 끝남
+      attack: { row: 2, frames: 5, fps: 9, strikeFrame: 3, strikeHold: ATTACK_FX_TIME.breath - 1 / 9, groundY: 69 },
+      hit:    { row: 3, frames: 2, fps: 10, groundY: 69 },
+      death:  { row: 4, frames: 5, fps: 8, groundY: 69 },
+    },
+  },
   SH_002: {   // 이그리트 (기본 그림자: 제자리 고정이라 이동 동작 없음)
     src: 'assets/sprites/sh_002.png',   // 갑옷·빛만 그림자 보랏빛으로 바꾼 시트 (붉은 머리카락은 원본 그대로)
     glow: true,       // 추출 그림자처럼 보랏빛 윤곽 빛
@@ -1416,8 +1464,12 @@ function pickAnim(unit, time, moving, cfg, engaged) {
   const atk = cfg.anims.attack;
   if (unit.attackAt !== undefined) {
     const t = time - unit.attackAt;
-    if (t >= 0 && t < (atk.frames - atk.strikeFrame) / atk.fps) {
-      return { anim: 'attack', frame: atk.strikeFrame + Math.floor(t * atk.fps) };
+    // strikeHold(초)가 있으면 타격 프레임을 그만큼 유지한 뒤 나머지 프레임 (카이셀: 브레스를 뿜는 동안 입을 벌리고 있음)
+    const hold = atk.strikeHold || 1 / atk.fps;
+    const rest = (atk.frames - atk.strikeFrame - 1) / atk.fps;
+    if (t >= 0 && t < hold + rest) {
+      const frame = t < hold ? atk.strikeFrame : atk.strikeFrame + 1 + Math.floor((t - hold) * atk.fps);
+      return { anim: 'attack', frame: Math.min(atk.frames - 1, frame) };
     }
   }
   if (unit.hitAt !== undefined) {
@@ -2088,6 +2140,44 @@ const SLAM_FX = {
   reach: 30,     // 아이언이 바라보는 쪽으로 떨어진 거리(px)
   upright: true, // 위아래 반전 안 함
 };
+// 카이셀 브레스 (assets/sprites/fx_breath.png, 128×38 도트 8프레임, 보랏빛): 입에서 뿜어져 길게 뻗었다가 흩어짐.
+// 다른 이펙트와 달리 맞은 적 쪽으로 방향을 돌림. 광역 공격이라 적이 가까워도 줄이지 않고 늘 같은 길이로 뒤쪽 적까지 뻗음
+// (피해도 이 줄기를 따라 들어감: 데이터 targetType 'line', lineLength 180 ≈ 입 앞 37px + 브레스 142px)
+const BREATH_FX = {
+  src: 'assets/sprites/fx_breath.png', w: 128, h: 38, frames: 8,
+  originX: 3, originY: 19,   // 칸 안에서 브레스가 시작되는 곳 (초승달 머리 뒤쪽 끝, 줄 가운데)
+  length: 118,               // 배율 1일 때 머리에서 불꽃 끝까지(px)
+  mouthReach: 37,            // 카이셀 판정 위치에서 바라보는 쪽으로 입까지(px) = 브레스 프레임(공격 3번째)에서 벌린 입 앞 (칸 x 87)
+  mouthLift: 31,             // 판정 위치에서 위로 입 높이(px) = 칸 y 28 (발끝 y 69는 판정 위치 아래 12px)에서 2px 더 위 (눈으로 맞춤)
+  scale: 1.2,                // 늘 이 배율 (약 142px: 사거리 150 끝의 적과 그 뒤 폭발 범위까지)
+  maxTilt: 0.9,              // 데이터에 lineMaxTilt가 없을 때 쓰는 최대 각도(라디안)
+  glow: 'rgba(169, 139, 255, 0.6)',
+};
+function drawBreathFx(ctx, fx) {
+  const B = BREATH_FX;
+  if (!B.img) return false;
+  const p = Math.min(0.999, Math.max(0, (fx.life - fx.ttl) / fx.life));
+  const frame = Math.floor(p * B.frames);
+  const dir = fx.facing || (fx.x2 >= fx.x1 ? 1 : -1);
+  const mx = fx.x1 + dir * B.mouthReach, my = fx.y1 - B.mouthLift;
+  const tx = fx.x2, ty = fx.y2 - 6;   // 맞은 적 몸통 높이
+  // 각도: 입에서 적을 본 각도를 바라보는 쪽 기준 maxTilt 안으로 부드럽게 눌러 줌 (작은 각도는 거의 그대로,
+  // 가까운 적처럼 큰 각도일수록 덜 꺾임). 피해 줄기도 같은 방식이라 거의 같은 쪽으로 뻗음
+  const d = lineDir(dir * Math.max(8, dir * (tx - mx)), ty - my, fx.maxTilt ?? B.maxTilt);
+  const ang = Math.atan2(d.uy, d.ux);
+  const k = B.scale;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.shadowColor = B.glow;
+  ctx.shadowBlur = 6;
+  ctx.translate(mx, my);
+  ctx.rotate(ang);
+  if (Math.abs(ang) > Math.PI / 2) ctx.scale(1, -1);   // 왼쪽으로 뿜을 때 불꽃 모양이 뒤집혀 보이지 않게
+  ctx.scale(k, k);
+  ctx.drawImage(B.img, frame * B.w, 0, B.w, B.h, -B.originX, -B.originY, B.w, B.h);
+  ctx.restore();
+  return true;
+}
 const ATTACK_FX = { claw: CLAW_FX, slash: SLASH_FX, ice: ICE_FX, bearclaw: BEARCLAW_FX, slam: SLAM_FX, bite: BITE_FX };
 
 // 잔영 (assets/sprites/remnant.png): 보랏빛 그림자 불꽃 6프레임 반복. 파일이 없으면 기존 원형으로 그림
@@ -2386,7 +2476,7 @@ function drawCoreSprite(ctx, core, state, C) {
 const CORE_HP_LOW = 50;   // 거점 HP가 이 값 이하면 숫자를 붉게
 
 function loadFxSheets() {
-  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, SLAM_FX, BITE_FX, REMNANT_FX, DEMON_WINDOWS, ANT_GLOW, ...Object.values(CORE_SPRITES)]) {
+  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, SLAM_FX, BITE_FX, BREATH_FX, REMNANT_FX, DEMON_WINDOWS, ANT_GLOW, ...Object.values(CORE_SPRITES)]) {
     const img = new Image();
     img.onload = () => { fx.img = fx.shade ? buildTintedSheet(img, fx.shade) : img; };
     img.onerror = () => console.warn(`[이펙트 불러오기 실패] ${fx.src}`);
@@ -2755,6 +2845,10 @@ function render(ctx, state, view) {
   // 공격 선 / 할퀴기 자국
   for (const fx of state.effects) {
     if (PROC_FX[fx.style]) { PROC_FX[fx.style](ctx, fx); continue; }   // 그림 없이 코드로 그리는 탄환·폭발
+    if (fx.style === 'breath') {   // 카이셀 브레스 (그림이 없으면 폭발 원으로 대신)
+      if (drawBreathFx(ctx, fx)) continue;
+      PROC_FX.blast(ctx, fx); continue;
+    }
     if (ATTACK_FX[fx.style]) {   // 이펙트 시트가 있는 공격은 공격 선 없이 이펙트만
       if (drawAttackFx(ctx, fx)) continue;
       if (fx.ttl < fx.life - LINE_FX_TIME) continue;   // 이펙트 파일이 없으면 처음 잠깐만 공격 선
@@ -2874,17 +2968,27 @@ function hideToast() {
 }
 
 // 이번 판에 쓸 수 있는 카드만 표시 (챕터 보상으로 해금된 카드 포함). 숫자 키 = 카드 순서
+// 카드 6장(데이터의 모든 기본 그림자)을 처음부터 3열 2줄로 고정해서 보여 줌.
+// 아직 해금되지 않은 카드는 어둡게 덮고 자물쇠 + 해금 조건을 표시, 해금되면 풀림. 숫자 키는 카드 자리 번호 그대로
+const LOCK_ICON =   // 도트 자물쇠 (12×14)
+  '<svg class="lock-icon" viewBox="0 0 12 14" width="24" height="28" shape-rendering="crispEdges" aria-hidden="true">' +
+  '<path fill="currentColor" d="M3 1h6v1h1v4H8V3H4v3H2V2h1z"/>' +
+  '<path fill="currentColor" d="M1 6h10v7H1z"/>' +
+  '<path fill="#0a0d1c" d="M5 8h2v3H5z"/></svg>';
 function buildShadowCards() {
   const wrap = game.ui.cards;
-  const ids = game.state.availableShadowIds;
-  if (wrap.dataset.ids === ids.join(',')) return;   // 같은 카드 구성이면 다시 만들지 않음
-  wrap.dataset.ids = ids.join(',');
+  const all = GAME_DATA.shadows;
+  const open = game.state.availableShadowIds;
+  const key = all.map((s) => s.id + (open.includes(s.id) ? '' : '!')).join(',');
+  if (wrap.dataset.ids === key) return;   // 같은 카드·해금 상태면 다시 만들지 않음
+  wrap.dataset.ids = key;
   wrap.innerHTML = '';
-  wrap.style.setProperty('--cols', ids.length <= 4 ? ids.length : 3);   // 5장 이상은 3열 2줄
-  wrap.classList.toggle('compact', ids.length > 4);
-  ids.map(findShadowData).forEach((s, i) => {
+  wrap.style.setProperty('--cols', all.length <= 4 ? all.length : 3);   // 5장 이상은 3열 2줄
+  wrap.classList.toggle('compact', all.length > 4);
+  all.forEach((s, i) => {
+    const locked = !open.includes(s.id);
     const btn = document.createElement('button');
-    btn.className = 'card';
+    btn.className = 'card' + (locked ? ' locked' : '');
     btn.type = 'button';
     btn.dataset.shadowId = s.id;
     btn.style.setProperty('--card-color', s.color);
@@ -2897,7 +3001,9 @@ function buildShadowCards() {
       `<span class="card-name">${s.name}</span>` +
       `<span class="card-role">${ROLE_TEXT[s.role] || s.role}</span>` +
       `<span class="card-stats">HP ${s.maxHp} · ATK ${s.attack} · 사거리 ${s.attackRange}</span>` +
-      `<span class="card-cost">에너지 ${s.cost}</span>`;
+      `<span class="card-cost">에너지 ${s.cost}</span>` +
+      (locked ? `<span class="card-lock">${LOCK_ICON}<span class="card-lock-text">챕터 ${s.unlockAfterChapter} 클리어 시 해금</span></span>` : '');
+    if (locked) btn.setAttribute('aria-disabled', 'true');
     btn.addEventListener('click', () => selectShadow(s.id));
     wrap.appendChild(btn);
   });
@@ -2906,6 +3012,11 @@ function buildShadowCards() {
 function selectShadow(id) {
   const st = game.state;
   if (!isFieldActive(st)) return;
+  if (!st.availableShadowIds.includes(id)) {   // 잠긴 카드
+    const d = findShadowData(id);
+    if (d) showToast(`${d.name}: 챕터 ${d.unlockAfterChapter} 클리어 시 해금`, 'warn');
+    return;
+  }
   st.selectedShadowId = st.selectedShadowId === id ? null : id;  // 같은 카드 다시 누르면 선택 해제
   if (st.selectedShadowId) {                                     // 카드 선택 시 다른 패널 닫기
     st.selectedRemnantUid = null;
@@ -3073,16 +3184,17 @@ function buildChapterList() {
   GAME_DATA.chapters.forEach((ch, i) => {
     const id = ch.chapterId;
     const unlocked = isChapterUnlocked(save, id);
-    const cleared = save.cleared[id];
+    const cleared = save.cleared[id];                  // 실제 기록 (최고 기록 표시용)
+    const done = isChapterCleared(save, id);           // 테스트 설정 포함 클리어 여부
     const run = save.resume[id];
     const card = document.createElement('div');
-    card.className = 'chapter-card' + (unlocked ? '' : ' locked') + (cleared ? ' cleared' : '') + (run ? ' progress' : '');
-    const badge = !unlocked ? '잠김' : run ? '진행 중' : cleared ? '클리어' : '도전 가능';
+    card.className = 'chapter-card' + (unlocked ? '' : ' locked') + (done ? ' cleared' : '') + (run ? ' progress' : '');
+    const badge = !unlocked ? '잠김' : run ? '진행 중' : done ? '클리어' : '도전 가능';
     const lines = [`웨이브 ${ch.waves.length}개`];
     const fresh = newEnemiesIn(id);
     if (fresh.length && i > 0) lines.push(`새 적: ${fresh.map((e) => e.name).join(' · ')}`);
     const rewards = rewardShadowsFor(id);
-    if (rewards.length) lines.push(`클리어 보상: ${rewards.map((r) => `${r.name} 카드`).join(' · ')}${cleared ? ' (획득)' : ''}`);
+    if (rewards.length) lines.push(`클리어 보상: ${rewards.map((r) => `${r.name} 카드`).join(' · ')}${done ? ' (획득)' : ''}`);
     if (cleared) lines.push(`최고 기록 · 거점 HP ${cleared.best.coreHp}/${maxHp} · 처치 ${cleared.best.kills}`);
     const prev = GAME_DATA.chapters[i - 1];
     let buttons;
@@ -3093,7 +3205,7 @@ function buildChapterList() {
       buttons = `<button type="button" class="btn-secondary" data-action="restart" data-chapter="${id}">${confirming ? '정말 처음부터?' : '처음부터'}</button>` +
         `<button type="button" class="btn-primary" data-action="resume" data-chapter="${id}">이어하기</button>`;
     } else {
-      buttons = `<button type="button" class="btn-primary" data-action="start" data-chapter="${id}">${cleared ? '다시 도전' : '시작'}</button>`;
+      buttons = `<button type="button" class="btn-primary" data-action="start" data-chapter="${id}">${done ? '다시 도전' : '시작'}</button>`;
     }
     card.innerHTML =
       `<div class="chapter-head"><span class="chapter-no">CHAPTER ${id}</span><span class="chapter-badge">${badge}</span></div>` +
@@ -3173,8 +3285,8 @@ function onKeyDown(evt) {
     return;
   }
   const num = Number(evt.key);
-  const ids = game.state.availableShadowIds;
-  if (Number.isInteger(num) && num >= 1 && num <= ids.length) selectShadow(ids[num - 1]);
+  const all = GAME_DATA.shadows;   // 숫자 키 = 카드 자리 번호 (잠긴 카드는 selectShadow에서 막음)
+  if (Number.isInteger(num) && num >= 1 && num <= all.length) selectShadow(all[num - 1].id);
 }
 
 function onMouseMove(evt) {
@@ -3286,7 +3398,7 @@ function syncUI() {
   for (const btn of ui.cards.children) {
     const d = findShadowData(btn.dataset.shadowId);
     btn.classList.toggle('selected', st.selectedShadowId === d.id);
-    btn.classList.toggle('poor', st.energy < d.cost || basicFull);
+    btn.classList.toggle('poor', !btn.classList.contains('locked') && (st.energy < d.cost || basicFull));
   }
 
   setHidden(ui.btnStart, st.status !== STATUS.PREPARATION);

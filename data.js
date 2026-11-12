@@ -25,6 +25,8 @@ const GAME_DATA = {
     maxBasic: 4,           // 기본 그림자 최대 수 (처음부터 쓰는 카드 기준). 챕터 보상으로 카드가 1장 늘 때마다 +1
     fixedStep: 1 / 60,     // 전투 계산 간격(초). 바꾸지 않는 것을 권장
     unlockAllChapters: true, // 테스트용: true면 클리어 여부와 상관없이 모든 챕터를 열어 둠 (출시 전 false로). 카드 해금은 그대로 클리어 기준
+    clearAllChapters: true,  // 테스트용: true면 모든 챕터를 클리어한 것으로 봄 → 보상 카드(어금니·카이셀·베르)와 기본 그림자 최대 수 모두 열림.
+                             //   저장 기록은 건드리지 않음 (최고 기록은 실제로 클리어한 챕터만 표시). 출시 전 false로
   },
 
   // 맵 이미지(1602×981)를 가로 960에 맞춘 크기. 거점 = 맵 중앙 문양 중심
@@ -53,14 +55,16 @@ const GAME_DATA = {
 
   // 기본 소환 그림자: 원하는 위치에 배치하는 고정형 방어 병력
   //  targetType: single(한 명) · all_in_range(사거리 안 전부) · splash(한 명 + 그 주변 splashRadius 안 전부)
+  //              · line(한 명 쪽으로 뻗는 길이 lineLength·폭 lineWidth 줄기에 걸린 적 전부, 뒤쪽 적 포함 = 카이셀 브레스.
+  //                lineMaxTilt: 줄기가 위아래로 꺾이는 최대 각도(라디안), 가까운 적에게 급하게 꺾이지 않게 부드럽게 눌러 줌)
   //  unlockAfterChapter: 그 챕터를 클리어하면 카드가 생김 (없으면 처음부터 사용). 카드가 늘 때마다 기본 그림자 최대 수 +1
   //  cardImage·attackFx·스프라이트가 없으면 카드는 색 띠만, 공격은 기본 연출(공격 선·탄환·폭발 원)로 표시
   shadows: [
     { id: 'SH_001', name: '아이언',   role: 'tank',   cost: 30, maxHp: 300, attack: 20, attackInterval: 1.5, attackRange: 100, targetType: 'single',       color: '#4f86ff', attackFx: 'slam', cardImage: 'assets/cards/sh_001.webp' },
     { id: 'SH_002', name: '이그리트', role: 'damage', cost: 50, maxHp: 150, attack: 65, attackInterval: 1.0, attackRange: 80,  targetType: 'single',       color: '#a66bff', attackFx: 'slash', cardImage: 'assets/cards/sh_002.webp' },
     { id: 'SH_003', name: '탱크',     role: 'area',   cost: 40, maxHp: 220, attack: 35, attackInterval: 2.0, attackRange: 110, targetType: 'all_in_range', color: '#2ec4b6', attackFx: 'bearclaw', cardImage: 'assets/cards/sh_003.webp' },
+    { id: 'SH_005', name: '카이셀',   role: 'area',   cost: 55, maxHp: 180, attack: 28, attackInterval: 2.2, attackRange: 150, targetType: 'line', lineLength: 180, lineWidth: 36, lineMaxTilt: 0.9, color: '#5fd0ff', attackFx: 'breath', cardImage: 'assets/cards/sh_005.webp', unlockAfterChapter: 4 },
     { id: 'SH_004', name: '어금니',   role: 'magic',  cost: 45, maxHp: 120, attack: 38, attackInterval: 1.6, attackRange: 170, targetType: 'single',       color: '#ff8a3d', attackFx: 'bolt',  unlockAfterChapter: 3 },
-    { id: 'SH_005', name: '카이셀',   role: 'area',   cost: 55, maxHp: 180, attack: 28, attackInterval: 2.2, attackRange: 150, targetType: 'splash', splashRadius: 55, color: '#5fd0ff', attackFx: 'blast', unlockAfterChapter: 4 },
     { id: 'SH_006', name: '베르',     role: 'speed',  cost: 50, maxHp: 200, attack: 20, attackInterval: 0.45, attackRange: 70, targetType: 'single',       color: '#b8f04a', unlockAfterChapter: 5 },
   ],
 
