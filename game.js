@@ -29,7 +29,7 @@ const GAME_DATA = {
     waveStartBonus: 20,    // 2웨이브부터 [웨이브 시작]을 누를 때 지급
     recallRefundRate: 1.0, // 회수 시 환불 비율 (1.0 = 전액). 이번 준비 단계에서 배치한 기본 그림자만 회수 가능
     dismantleRefundRate: 0.5, // 해체 시 반환 비율. 생성 때 실제 소비한 에너지 기준, 반올림 (SD-DISMANTLE)
-    coreHp: 200,           // 거점 최대 HP. 거점에 닿은 적의 공격력만큼 깎임
+    coreHp: 200,           // 거점 최대 HP. 거점에 붙은 적이 공격 간격마다 공격력만큼 깎음
     maxArmy: 15,           // 전체 군단 최대 수 (기본 + 추출)
     maxBasic: 4,           // 기본 그림자 최대 수
     fixedStep: 1 / 60,     // 전투 계산 간격(초). 바꾸지 않는 것을 권장
@@ -69,7 +69,7 @@ const GAME_DATA = {
   enemies: [
     { id: 'EN_001', name: '일반형',   maxHp: 100, attack: 15, moveSpeed: 35, attackInterval: 2.0, attackRange: 45, radius: 14, color: '#d99a3e', attackFx: 'claw' },
     { id: 'EN_002', name: '돌격형',   maxHp: 70,  attack: 12, moveSpeed: 65, attackInterval: 1.5, attackRange: 45, radius: 12, color: '#ff5d73', attackFx: 'ice' },
-    { id: 'EN_003', name: '중장갑형', maxHp: 260, attack: 30, moveSpeed: 20, attackInterval: 2.5, attackRange: 45, radius: 18, color: '#b07a5a' },
+    { id: 'EN_003', name: '중장갑형', maxHp: 260, attack: 30, moveSpeed: 20, attackInterval: 2.5, attackRange: 45, radius: 18, color: '#b07a5a', attackFx: 'bite' },
   ],
 
   // 그림자 추출: 적 사망 위치에 잔영 생성 → 플레이어가 선택·에너지 지불 → 자동 추적형 그림자
@@ -595,7 +595,8 @@ function createEnemy(state, enemyId, spawnIndex) {
     attackRange: d.attackRange,
     cooldown: 0,
     alive: true,
-    reachedCore: false,
+    atCore: false,   // 거점에 붙어 거점을 공격하는 중 (처치될 때까지 계속)
+    coreSlot: null,  // 거점 둘레에서 차지한 자리(각도, 라디안). 도착하면 정해지고 그 자리까지 둘레를 따라 걸어감
     moving: true,
   };
 }
@@ -701,17 +702,17 @@ function updateGame(state, dt) {
 
   updateSpawning(state, dt);              // 1. 적 생성
   updateRemnants(state, dt);              // 2. 잔영 시간 갱신
-  updateEnemyMovement(state, dt);         // 3. 적 이동 / 거점 도달
+  updateEnemyMovement(state, dt);         // 3. 적 이동 / 거점 도달 (도달하면 멈춰서 거점 공격)
+  updateExtractedAI(state, dt);           // 4. 추출 그림자 탐색 / 추격 / 복귀
+  updateCooldowns(state, dt);             // 5. 쿨타임
+  const killed = processShadowAttacks(state); // 6. 그림자 공격 (기본 + 추출)
+  processEnemyAttacks(state);             //    적 공격: 그림자 또는 거점 (이번 틱에 죽은 적은 공격하지 않음)
   if (state.coreHp <= 0) {                //    거점 HP 0 → 즉시 패배
     cleanupDead(state);
     state.selectedRemnantUid = null;
     setStatus(state, STATUS.DEFEAT);
     return;
   }
-  updateExtractedAI(state, dt);           // 4. 추출 그림자 탐색 / 추격 / 복귀
-  updateCooldowns(state, dt);             // 5. 쿨타임
-  const killed = processShadowAttacks(state); // 6. 그림자 공격 (기본 + 추출)
-  processEnemyAttacks(state);             //    적 공격 (이번 틱에 죽은 적은 공격하지 않음)
   for (const enemy of killed) {           // 7. 처치 보상 + 잔영 생성 (사망 1회당 1번)
     state.stats.kills += 1;
     state.stats.waveKills += 1;
@@ -751,16 +752,64 @@ function updateEnemyMovement(state, dt) {
   const core = GAME_DATA.field.core;
   for (const e of state.enemies) {
     if (!e.alive) continue;
-    e.moving = !findEnemyTarget(state, e);   // 사거리 안에 그림자가 있으면 멈추고 공격
+    e.moving = !e.atCore && !findEnemyTarget(state, e);   // 사거리 안에 그림자가 있거나 거점에 붙었으면 멈춤
     if (!e.moving) continue;
+    if (e.coreSlot !== null) {        // 거점 둘레를 따라 자기 자리로 이동 중
+      moveToCoreSlot(e, core, e.moveSpeed * dt);
+      continue;
+    }
     faceToward(e, core.x);
     moveToward(e, core.x, core.y, e.moveSpeed * dt, 0);
     if (dist(e.x, e.y, core.x, core.y) <= core.radius + e.radius) {
-      e.alive = false;                // 처치가 아니므로 보상·잔영 없음
-      e.reachedCore = true;
-      state.coreHp = Math.max(0, state.coreHp - e.attack);   // 적의 공격력만큼 거점 피해
-      state.stats.coreDamageTaken += e.attack;
+      // 사라지지 않고 거점 둘레의 빈자리를 잡아 멈춰서 공격 (processEnemyAttacks)
+      e.coreSlot = pickCoreSlot(state, e, core);
+      moveToCoreSlot(e, core, 0);
     }
+  }
+}
+
+// 거점 둘레 자리 잡기: 도착한 방향에서 가장 가까운, 다른 적과 겹치지 않는 각도를 고름
+//  (도착 각도 → +1칸 → -1칸 → +2칸 … 순서). 둘레가 꽉 차면 도착 각도 그대로 (겹침 허용)
+const CORE_SLOT_GAP = 2;   // 이웃한 적 사이 여유(px)
+function pickCoreSlot(state, e, core) {
+  const R = core.radius + e.radius;
+  const a0 = Math.atan2(e.y - core.y, e.x - core.x);
+  const others = state.enemies.filter((o) => o !== e && o.alive && o.coreSlot !== null);
+  const step = (e.radius * 2 + CORE_SLOT_GAP) / R;
+  const tries = Math.floor(Math.PI / step);
+  for (let i = 0; i <= tries; i++) {
+    for (const sign of i === 0 ? [1] : [1, -1]) {
+      const a = a0 + sign * i * step;
+      const free = others.every((o) => {
+        const need = (e.radius + o.radius + CORE_SLOT_GAP) / ((R + core.radius + o.radius) / 2);
+        return Math.abs(angleDiff(a, o.coreSlot)) >= need;
+      });
+      if (free) return a;
+    }
+  }
+  return a0;
+}
+
+function angleDiff(a, b) {   // a - b 를 -π ~ π 로
+  let d = (a - b) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+
+// 거점 둘레(반경 = 거점 + 자기 크기)를 따라 자리 각도로 step(px)만큼 이동. 도착하면 atCore = true
+function moveToCoreSlot(e, core, step) {
+  const R = core.radius + e.radius;
+  const cur = Math.atan2(e.y - core.y, e.x - core.x);
+  const d = angleDiff(e.coreSlot, cur);
+  const move = Math.min(Math.abs(d), step / R);
+  const a = cur + Math.sign(d) * move;
+  e.x = core.x + Math.cos(a) * R;
+  e.y = core.y + Math.sin(a) * R;
+  faceToward(e, core.x);
+  if (Math.abs(d) - move < 1e-4) {
+    e.atCore = true;
+    e.moving = false;
   }
 }
 
@@ -860,10 +909,21 @@ function processShadowAttacks(state) {
 }
 
 function processEnemyAttacks(state) {
+  const core = GAME_DATA.field.core;
   for (const e of state.enemies) {
     if (!e.alive || e.cooldown > 0) continue;
     const target = findEnemyTarget(state, e);   // 매번 다시 찾음 → 이미 죽은 그림자 공격 방지
-    if (!target) continue;
+    if (!target) {
+      // 거점에 붙은 적: 사거리에 그림자가 없으면 공격 간격마다 공격력만큼 거점 피해 (처치될 때까지 반복)
+      if (!e.atCore) continue;
+      state.coreHp = Math.max(0, state.coreHp - e.attack);
+      state.stats.coreDamageTaken += e.attack;
+      faceToward(e, core.x);
+      e.attackAt = state.elapsed;
+      addEffect(state, e.x, e.y, core.x, core.y, 'enemy', findEnemyData(e.typeId).attackFx).facing = e.facing;
+      e.cooldown = e.attackInterval;
+      continue;
+    }
     const died = applyDamage(target, calcDamage(e.attack));
     target.hitAt = state.elapsed;
     if (died) addCorpse(state, target);   // 그림자 사망 연출 (스프라이트가 있는 유닛만 그려짐)
@@ -919,7 +979,7 @@ function checkWaveComplete(state) {
 
 // 공격 연출 (게임 규칙에 영향 없음). style: 없으면 공격 선, 'claw'면 할퀴기 자국
 const LINE_FX_TIME = 0.12;
-const ATTACK_FX_TIME = { claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
+const ATTACK_FX_TIME = { claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
 function addEffect(state, x1, y1, x2, y2, kind, style) {
   const ttl = ATTACK_FX_TIME[style] || LINE_FX_TIME;
   const fx = { x1, y1, x2, y2, kind, style, ttl, life: ttl };
@@ -1125,6 +1185,21 @@ const SPRITES = {
       attack: { row: 1, frames: 5, fps: 10, strikeFrame: 3, groundY: 58 },   // 0~2 단검 들어올림, 3 돌진 베기(타격), 4 복귀
       hit:    { row: 2, frames: 2, fps: 10, groundY: 58 },
       death:  { row: 3, frames: 5, fps: 9, groundY: 58 },
+    },
+  },
+  EN_003: {   // 중장갑형 (푸른 균열 코브라). 줄마다 연결 덩어리로 프레임을 나누고 흰 배 가운데·몸 아래를 맞춰 108×64 칸으로 정렬
+    src: 'assets/sprites/en_003.png',
+    cellW: 108, cellH: 64,
+    scale: 1,
+    anchorX: 50,      // 칸 안에서 몸 가운데 x (흰 배는 58, 똬리는 그보다 왼쪽)
+    bodyTop: 18,      // 이동 줄의 머리 끝 높이 (HP바 위치)
+    shadow: { w: 26, h: 4, dx: -4 },
+    anims: {
+      idle:   { row: 0, frames: 4, fps: 4, groundY: 62 },
+      walk:   { row: 1, frames: 6, fps: 6, stride: 24, groundY: 62 },   // 기어가기 한 바퀴(6프레임)에 24px (느린 유닛)
+      attack: { row: 2, frames: 5, fps: 9, strikeFrame: 3, groundY: 62 },   // 0~2 고개를 들고 입을 벌림, 3 앞으로 물기(타격), 4 복귀
+      hit:    { row: 3, frames: 2, fps: 10, groundY: 62 },
+      death:  { row: 4, frames: 5, fps: 8, groundY: 62 },
     },
   },
   SH_001: {   // 아이언 (방패 기사). 원본 격자가 고르지 않아 프레임마다 발 가운데·발끝을 맞춰 72×64 칸으로 정렬
@@ -1515,6 +1590,16 @@ const ICE_FX = {
   bodyLift: 10,  // 판정 위치에서 위로(px) = 말 머리·단검 높이
   reach: 22,     // 돌격형이 바라보는 쪽으로 떨어진 거리(px)
 };
+// 중장갑형 물기 (assets/sprites/fx_bite.png, 40×40 도트 6프레임, 직접 그림). 위아래 턱이 벌어졌다 닫히며 물고,
+// 닫히는 순간 충격 빛 → 이빨 자국·파편. 줄 0 푸른빛(적, 뱀 균열 색) · 줄 1 보랏빛(추출 그림자). 뱀 입 앞에 그림
+const BITE_FX = {
+  src: 'assets/sprites/fx_bite.png', w: 40, h: 40, frames: 6,
+  rows: { enemy: 0, extracted: 1 },
+  glow: { enemy: 'rgba(80, 200, 255, 0.55)', extracted: 'rgba(160, 120, 255, 0.6)' },
+  bodyLift: 19,  // 판정 위치에서 위로(px) = 물기 프레임의 입 높이 (발끝은 아래로 12px)
+  reach: 48,     // 뱀이 바라보는 쪽으로 떨어진 거리(px) = 입 끝
+  upright: true, // 그린 모양 그대로 (위아래 반전 안 함)
+};
 // 탱크 발톱 (assets/sprites/fx_bearclaw.png, 69×56 도트 6프레임, 세로로 1.22배 늘림). 곰이 바라보는 쪽 바로 앞에 내려찍듯 그림
 const BEARCLAW_FX = {
   src: 'assets/sprites/fx_bearclaw.png', w: 69, h: 56, frames: 6,
@@ -1534,7 +1619,7 @@ const SLAM_FX = {
   reach: 30,     // 아이언이 바라보는 쪽으로 떨어진 거리(px)
   upright: true, // 위아래 반전 안 함
 };
-const ATTACK_FX = { claw: CLAW_FX, slash: SLASH_FX, ice: ICE_FX, bearclaw: BEARCLAW_FX, slam: SLAM_FX };
+const ATTACK_FX = { claw: CLAW_FX, slash: SLASH_FX, ice: ICE_FX, bearclaw: BEARCLAW_FX, slam: SLAM_FX, bite: BITE_FX };
 
 // 잔영 (assets/sprites/remnant.png): 보랏빛 그림자 불꽃 6프레임 반복. 파일이 없으면 기존 원형으로 그림
 //  - 바닥 웅덩이를 쓰러진 적의 발밑에 맞춤. 클릭 판정(잔영 위치 반경 16px)은 그대로
@@ -1578,7 +1663,7 @@ function drawCoreSprite(ctx, core, state, hpRatio) {
 }
 
 function loadFxSheets() {
-  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, SLAM_FX, REMNANT_FX, CORE_SPRITE]) {
+  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, SLAM_FX, BITE_FX, REMNANT_FX, CORE_SPRITE]) {
     const img = new Image();
     img.onload = () => { fx.img = fx.shade ? buildTintedSheet(img, fx.shade) : img; };
     img.onerror = () => console.warn(`[이펙트 불러오기 실패] ${fx.src}`);
