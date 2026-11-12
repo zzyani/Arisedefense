@@ -24,6 +24,7 @@ const GAME_DATA = {
     maxArmy: 15,           // 전체 군단 최대 수 (기본 + 추출)
     maxBasic: 4,           // 기본 그림자 최대 수 (처음부터 쓰는 카드 기준). 챕터 보상으로 카드가 1장 늘 때마다 +1
     fixedStep: 1 / 60,     // 전투 계산 간격(초). 바꾸지 않는 것을 권장
+    unlockAllChapters: true, // 테스트용: true면 클리어 여부와 상관없이 모든 챕터를 열어 둠 (출시 전 false로). 카드 해금은 그대로 클리어 기준
   },
 
   // 맵 이미지(1602×981)를 가로 960에 맞춘 크기. 거점 = 맵 중앙 문양 중심
@@ -95,8 +96,9 @@ const GAME_DATA = {
   },
 
   // 챕터: 챕터마다 웨이브 5개. 앞 챕터를 클리어하면 다음 챕터가 해금됨 (진행·기록은 브라우저에 저장)
-  //  theme: 배경. map = 맵 그림 경로(없거나 못 불러오면 기본 맵 assets/map.webp에 tint 색을 덮어 대신 표시)
-  //         맵 그림은 기본 맵과 같은 배치여야 함: 1602×981, 가운데 거점, 북·동·남·서 네 출입구
+  //  theme: 배경. map = 맵 그림 경로(못 불러오면 기본 맵 assets/map.webp로 대신 표시), tint = 맵 위에 덮는 색(선택)
+  //         맵 그림은 기본 맵과 같은 배치여야 함: 1602×981, 가운데 문양 중심 = (801, 491.5), 북·동·남·서 네 출입구
+  //         (assets/maps/는 받은 그림을 문양 중심 기준으로 잘라 이 배치에 맞춘 것)
   //         decor: 'temple'이면 기본 맵용 불꽃·석상 눈빛·균열 빛 연출을 켬 (다른 맵에서는 위치가 맞지 않음)
   // 적은 배열 순서대로 spawnInterval 간격으로 생성됩니다 (첫 적은 웨이브 시작 즉시).
   // 북·남 출현 지점은 거점과 가까워(약 235px) 동·서(약 456px)보다 빨리 도착합니다.
@@ -133,7 +135,7 @@ const GAME_DATA = {
       ] },
     ] },
     { chapterId: 2, name: '설원 숲', desc: '코브라가 섞여 사방에서 동시에 밀려오는 눈 덮인 숲',
-      theme: { map: null, tint: 'rgba(170, 205, 255, 0.16)' }, waves: [
+      theme: { map: 'assets/maps/ch2.webp' }, waves: [
       { waveId: 1, spawnInterval: 2.2, enemies: [
         { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 1 },
         { enemyId: 'EN_002', spawn: 3 }, { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 },
@@ -169,7 +171,7 @@ const GAME_DATA = {
       ] },
     ] },
     { chapterId: 3, name: '오크 주둔지', desc: '멀리서 쏘는 원거리형이 처음 나타나는 주둔지',
-      theme: { map: null, tint: 'rgba(150, 105, 50, 0.18)' }, waves: [
+      theme: { map: 'assets/maps/ch3.webp' }, waves: [
       { waveId: 1, spawnInterval: 2.2, enemies: [
         { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_002', spawn: 1 }, { enemyId: 'EN_004', spawn: 0 },
         { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
@@ -204,7 +206,7 @@ const GAME_DATA = {
       ] },
     ] },
     { chapterId: 4, name: '악마성', desc: '주변을 한꺼번에 치는 광역형이 지키는 성',
-      theme: { map: null, tint: 'rgba(190, 30, 40, 0.18)' }, waves: [
+      theme: { map: 'assets/maps/ch4.webp' }, waves: [
       { waveId: 1, spawnInterval: 2.0, enemies: [
         { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_002', spawn: 1 }, { enemyId: 'EN_004', spawn: 0 },
         { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 1 }, { enemyId: 'EN_005', spawn: 0 },
@@ -243,7 +245,7 @@ const GAME_DATA = {
       ] },
     ] },
     { chapterId: 5, name: '개미굴', desc: '빠르게 파고드는 스피드형이 떼로 몰려오는 굴',
-      theme: { map: null, tint: 'rgba(120, 90, 30, 0.22)' }, waves: [
+      theme: { map: 'assets/maps/ch5.webp' }, waves: [
       { waveId: 1, spawnInterval: 1.8, enemies: [
         { enemyId: 'EN_006', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
         { enemyId: 'EN_006', spawn: 2 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_004', spawn: 0 },
@@ -286,7 +288,7 @@ const GAME_DATA = {
       ] },
     ] },
     { chapterId: 6, name: '카르테논 신전', desc: '모든 적이 다시 모여드는 마지막 결전',
-      theme: { map: 'assets/map.webp', decor: 'temple', tint: 'rgba(120, 40, 160, 0.14)' }, waves: [
+      theme: { map: 'assets/maps/ch6.webp' }, waves: [
       { waveId: 1, spawnInterval: 1.9, enemies: [
         { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_006', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
         { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_003', spawn: 1 }, { enemyId: 'EN_004', spawn: 0 },

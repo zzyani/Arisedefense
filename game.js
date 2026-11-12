@@ -671,7 +671,7 @@ function isValidRun(r, ch) {
 function isChapterUnlocked(save, chapterId) {
   const i = GAME_DATA.chapters.findIndex((c) => c.chapterId === chapterId);
   if (i < 0) return false;
-  if (i === 0) return true;
+  if (i === 0 || GAME_DATA.config.unlockAllChapters) return true;   // 테스트 설정: 전부 열림
   return !!save.cleared[GAME_DATA.chapters[i - 1].chapterId];
 }
 

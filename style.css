@@ -595,7 +595,7 @@ h2 {
 .chapter-desc { margin: 0; font-size: 11px; color: var(--sub); line-height: 1.6; }
 .chapter-info { margin: 0; font-size: 11px; color: var(--text); }
 .chapter-info.resume { color: var(--key); }
-.chapter-buttons { display: flex; gap: 8px; margin-top: 8px; }
+.chapter-buttons { display: flex; gap: 8px; margin-top: auto; padding-top: 8px; }   /* 설명 줄 수와 상관없이 버튼을 카드 맨 아래에 맞춤 */
 .chapter-buttons button { flex: 1; padding: 8px 10px; font-size: 12px; }
 .chapter-buttons button:disabled { cursor: not-allowed; opacity: 0.7; }
 .chapter-note { font-size: 11px; color: var(--sub); margin: 0 0 16px; }
