@@ -3,7 +3,7 @@
 /* ==================================================================
  * ARISE: 그림자 군단 디펜스 — game.js (v2.0 중앙 거점 · 자유 배치 · 그림자 추출)
  *
- *  [1] GAME_DATA   밸런스·콘텐츠 데이터 (수치 조정은 여기만 수정)
+ *  [1] GAME_DATA   밸런스·콘텐츠 데이터 → data.js (수치 조정·챕터 추가는 그 파일만 수정)
  *  [2] 상수 / 상태  게임 상태(GameState)와 상태 전이 규칙
  *  [3] 규칙 함수    배치, 회수, 추출, 대상 탐색 등 (화면 코드와 분리)
  *  [4] 전투 틱      1/60초마다 실행되는 전투 계산
@@ -15,149 +15,7 @@
  * ================================================================== */
 
 
-/* ==================================================================
- * [1] GAME_DATA
- *  - 좌표 단위는 전장 좌표(960×588 기준), 시간 단위는 초
- *  - spawn 값은 적 출현 지점 번호 (0 북, 1 동, 2 남, 3 서)
- *  - 데이터를 잘못 수정하면 게임 시작 전에 화면에 오류 목록이 표시됩니다.
- * ================================================================== */
-const GAME_DATA = {
-  config: {
-    startEnergy: 100,
-    maxEnergy: 150,
-    killReward: 10,
-    waveStartBonus: 20,    // 2웨이브부터 [웨이브 시작]을 누를 때 지급
-    recallRefundRate: 1.0, // 회수 시 환불 비율 (1.0 = 전액). 이번 준비 단계에서 배치한 기본 그림자만 회수 가능
-    dismantleRefundRate: 0.5, // 해체 시 반환 비율. 생성 때 실제 소비한 에너지 기준, 반올림 (SD-DISMANTLE)
-    coreHp: 200,           // 거점 최대 HP. 거점에 붙은 적이 공격 간격마다 공격력만큼 깎음
-    maxArmy: 15,           // 전체 군단 최대 수 (기본 + 추출)
-    maxBasic: 4,           // 기본 그림자 최대 수
-    fixedStep: 1 / 60,     // 전투 계산 간격(초). 바꾸지 않는 것을 권장
-  },
-
-  // 맵 이미지(1602×981)를 가로 960에 맞춘 크기. 거점 = 맵 중앙 문양 중심
-  field: {
-    width: 960,
-    height: 588,
-    core: { x: 480, y: 295, radius: 45 },
-    spawnPoints: [
-      // 아래 두 값은 표시 전용 (게임 규칙과 무관)
-      //  revealTop: 이 y보다 위쪽은 그리지 않아 적이 석상 턱 아래 벽에서 걸어 나오는 것처럼 보임
-      //  crack: 맵 이미지에서 이 출현 지점의 푸른 균열이 있는 영역 → 빛나는 연출에 사용
-      { id: 'N', label: '북', x: 480, y: 60, revealTop: 64, crack: { x: 405, y: 58, w: 120, h: 92 } },   // 석상 턱 바로 아래 (거점까지 235)
-      { id: 'E', label: '동', x: 936, y: 295, crack: { x: 810, y: 260, w: 140, h: 72 } },  // 거점까지 456
-      { id: 'S', label: '남', x: 480, y: 541, crack: { x: 418, y: 405, w: 110, h: 150 } }, // 아래쪽 출입구 (거점까지 246)
-      { id: 'W', label: '서', x: 24,  y: 295, crack: { x: 10, y: 260, w: 140, h: 72 } },   // 거점까지 456
-    ],
-    // 기본 그림자 배치 제한 (추출 그림자는 맵 범위만 검사)
-    placement: {
-      coreClear: 70,     // 거점 중심 70px 이내 불가
-      spawnClear: 50,    // 적 출현 지점 50px 이내 불가
-      edgeClear: 20,     // 맵 경계 20px 이내 불가
-      basicSpacing: 35,  // 기존 기본 그림자 35px 이내 불가
-    },
-    unitMargin: 12,      // 움직이는 유닛이 맵 경계 안쪽에 머무는 여백
-  },
-
-  // 기본 소환 그림자: 원하는 위치에 배치하는 고정형 방어 병력
-  shadows: [
-    { id: 'SH_001', name: '아이언',   role: 'tank',   cost: 30, maxHp: 300, attack: 20, attackInterval: 1.5, attackRange: 100, targetType: 'single',       color: '#4f86ff', attackFx: 'slam', cardImage: 'assets/cards/sh_001.webp' },
-    { id: 'SH_002', name: '이그리트', role: 'damage', cost: 50, maxHp: 150, attack: 65, attackInterval: 1.0, attackRange: 80,  targetType: 'single',       color: '#a66bff', attackFx: 'slash', cardImage: 'assets/cards/sh_002.webp' },
-    { id: 'SH_003', name: '탱크',     role: 'area',   cost: 40, maxHp: 220, attack: 35, attackInterval: 2.0, attackRange: 110, targetType: 'all_in_range', color: '#2ec4b6', attackFx: 'bearclaw', cardImage: 'assets/cards/sh_003.webp' },
-  ],
-
-  enemies: [
-    { id: 'EN_001', name: '일반형',   maxHp: 100, attack: 15, moveSpeed: 35, attackInterval: 2.0, attackRange: 45, radius: 14, color: '#d99a3e', attackFx: 'claw' },
-    { id: 'EN_002', name: '돌격형',   maxHp: 70,  attack: 12, moveSpeed: 65, attackInterval: 1.5, attackRange: 45, radius: 12, color: '#ff5d73', attackFx: 'ice' },
-    { id: 'EN_003', name: '중장갑형', maxHp: 260, attack: 30, moveSpeed: 20, attackInterval: 2.5, attackRange: 45, radius: 18, color: '#b07a5a', attackFx: 'bite' },
-  ],
-
-  // 그림자 추출: 적 사망 위치에 잔영 생성 → 플레이어가 선택·에너지 지불 → 자동 추적형 그림자
-  extraction: {
-    remnantChance: 1.0,     // 잔영 생성 확률 (1.0 = 100%)
-    remnantDuration: 12,    // 잔영 지속 시간(초). 전투 중에만 줄어듦
-    detectionRadius: 180,   // 그림자 기준 적 탐색 반경
-    maxRoamRadius: 220,     // 생성 위치(origin) 기준 최대 이동 반경
-    returnThreshold: 20,    // 추격 대상이 없고 원점에서 이만큼 떨어지면 복귀
-    spawnDelay: 0.5,        // 추출 직후 행동 시작까지(초)
-    units: [
-      { sourceEnemyId: 'EN_001', cost: 10, maxHp: 80,  attack: 23, moveSpeed: 55, attackRange: 35, attackInterval: 1.5 },
-      { sourceEnemyId: 'EN_002', cost: 15, maxHp: 56,  attack: 18, moveSpeed: 90, attackRange: 35, attackInterval: 1.2 },
-      { sourceEnemyId: 'EN_003', cost: 25, maxHp: 208, attack: 45, moveSpeed: 35, attackRange: 35, attackInterval: 2.0 },
-    ],
-  },
-
-  // 챕터: 챕터마다 웨이브 5개. 앞 챕터를 클리어하면 다음 챕터가 해금됨 (진행·기록은 브라우저에 저장)
-  // 적은 배열 순서대로 spawnInterval 간격으로 생성됩니다 (첫 적은 웨이브 시작 즉시).
-  // 북·남 출현 지점은 거점과 가까워(약 235px) 동·서(약 456px)보다 빨리 도착합니다.
-  chapters: [
-    { chapterId: 1, name: '던전 입구', desc: '늑대와 얼음 기수가 몰려오는 첫 관문', waves: [
-      { waveId: 1, spawnInterval: 2.5, enemies: [
-        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_001', spawn: 3 },
-        { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_001', spawn: 2 },
-      ] },
-      { waveId: 2, spawnInterval: 2.2, enemies: [
-        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
-        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 1 },
-        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_002', spawn: 2 },
-      ] },
-      { waveId: 3, spawnInterval: 2.0, enemies: [
-        { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 3 }, { enemyId: 'EN_001', spawn: 0 },
-        { enemyId: 'EN_003', spawn: 3 }, { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 1 },
-        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_002', spawn: 0 }, { enemyId: 'EN_001', spawn: 1 },
-        { enemyId: 'EN_001', spawn: 2 },
-      ] },
-      { waveId: 4, spawnInterval: 1.8, enemies: [
-        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
-        { enemyId: 'EN_003', spawn: 1 }, { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_001', spawn: 3 },
-        { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_003', spawn: 3 }, { enemyId: 'EN_002', spawn: 1 },
-        { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 },
-      ] },
-      { waveId: 5, spawnInterval: 1.6, enemies: [
-        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
-        { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_003', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 },
-        { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_003', spawn: 1 }, { enemyId: 'EN_002', spawn: 3 },
-        { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 1 }, { enemyId: 'EN_003', spawn: 0 },
-        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_001', spawn: 1 },
-      ] },
-    ] },
-    { chapterId: 2, name: '균열의 회랑', desc: '코브라가 섞여 사방에서 동시에 밀려오는 회랑', waves: [
-      { waveId: 1, spawnInterval: 2.2, enemies: [
-        { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 1 },
-        { enemyId: 'EN_002', spawn: 3 }, { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 },
-        { enemyId: 'EN_002', spawn: 0 }, { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 3 },
-      ] },
-      { waveId: 2, spawnInterval: 2.0, enemies: [
-        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
-        { enemyId: 'EN_003', spawn: 3 }, { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_001', spawn: 1 },
-        { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_002', spawn: 3 }, { enemyId: 'EN_001', spawn: 2 },
-        { enemyId: 'EN_002', spawn: 1 }, { enemyId: 'EN_001', spawn: 3 },
-      ] },
-      { waveId: 3, spawnInterval: 1.9, enemies: [
-        { enemyId: 'EN_002', spawn: 0 }, { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_001', spawn: 3 },
-        { enemyId: 'EN_003', spawn: 1 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 3 },
-        { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_003', spawn: 3 }, { enemyId: 'EN_002', spawn: 1 },
-        { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 0 }, { enemyId: 'EN_001', spawn: 3 },
-        { enemyId: 'EN_001', spawn: 1 },
-      ] },
-      { waveId: 4, spawnInterval: 1.7, enemies: [
-        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_003', spawn: 0 },
-        { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_002', spawn: 3 }, { enemyId: 'EN_003', spawn: 1 },
-        { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 1 },
-        { enemyId: 'EN_003', spawn: 3 }, { enemyId: 'EN_002', spawn: 0 }, { enemyId: 'EN_001', spawn: 1 },
-        { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_001', spawn: 0 },
-      ] },
-      { waveId: 5, spawnInterval: 1.5, enemies: [
-        { enemyId: 'EN_003', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
-        { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_003', spawn: 1 }, { enemyId: 'EN_001', spawn: 3 },
-        { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_002', spawn: 1 }, { enemyId: 'EN_003', spawn: 0 },
-        { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 3 }, { enemyId: 'EN_003', spawn: 2 },
-        { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 }, { enemyId: 'EN_001', spawn: 3 },
-        { enemyId: 'EN_002', spawn: 1 }, { enemyId: 'EN_001', spawn: 2 },
-      ] },
-    ] },
-  ],
-};
+/* [1] GAME_DATA는 data.js에 있습니다 (index.html에서 game.js보다 먼저 불러옴) */
 
 
 /* ==================================================================
@@ -194,7 +52,7 @@ const REASON_TEXT = Object.freeze({
   INVALID_STATUS:    '지금은 할 수 없습니다.',
   NO_SELECTION:      '소환할 그림자를 먼저 선택하세요.',
   INVALID_SHADOW:    '알 수 없는 그림자입니다.',
-  BASIC_FULL:        `기본 그림자는 최대 ${GAME_DATA.config.maxBasic}기까지 배치할 수 있습니다.`,
+  BASIC_FULL:        '기본 그림자를 더 배치할 수 없습니다.',   // 실제 메시지는 reasonText()가 현재 최대 수를 넣어 만듦
   ARMY_FULL:         `군단이 가득 찼습니다 (최대 ${GAME_DATA.config.maxArmy}기).`,
   NOT_ENOUGH_ENERGY: '그림자 에너지가 부족합니다.',
   // 배치 제한
@@ -213,15 +71,25 @@ const REASON_TEXT = Object.freeze({
   UNIT_LOST:         '선택한 그림자가 쓰러졌습니다.',
 });
 
-const ROLE_TEXT = Object.freeze({ tank: '탱커', damage: '딜러', area: '광역' });
+// 실패 결과 → 화면 메시지 (최대 수처럼 판마다 달라지는 값은 여기서 채움)
+function reasonText(result, state) {
+  if (result.reason === 'BASIC_FULL') return `기본 그림자는 최대 ${state.maxBasic}기까지 배치할 수 있습니다.`;
+  return REASON_TEXT[result.reason] || result.reason;
+}
+
+const ROLE_TEXT = Object.freeze({ tank: '탱커', damage: '딜러', area: '광역', magic: '원거리 마법', speed: '스피드' });
 const AI_TEXT = Object.freeze({ SPAWN: '추출 중', IDLE: '대기', CHASE: '추격', ATTACK: '공격', RETURN: '복귀', DEAD: '사망' });
 
-function createInitialState(chapterId = GAME_DATA.chapters[0].chapterId) {
+// availableShadowIds: 이번 판에 쓸 수 있는 기본 그림자 카드 (챕터 보상으로 해금된 카드 포함)
+function createInitialState(chapterId = GAME_DATA.chapters[0].chapterId, availableShadowIds = baseShadowIds()) {
   const c = GAME_DATA.config;
+  const available = GAME_DATA.shadows.filter((s) => availableShadowIds.includes(s.id)).map((s) => s.id);
   return {
     status: STATUS.READY,
     previousStatus: null,
     chapterId,                // 플레이 중인 챕터
+    availableShadowIds: available,
+    maxBasic: maxBasicFor(available),   // 기본 그림자 최대 수: 기본 4 + 해금 카드 1장당 1
     wave: 1,
     energy: c.startEnergy,
     maxEnergy: c.maxEnergy,
@@ -268,6 +136,31 @@ function setStatus(state, next) {
 function findShadowData(id)     { return GAME_DATA.shadows.find((s) => s.id === id) || null; }
 function findEnemyData(id)      { return GAME_DATA.enemies.find((e) => e.id === id) || null; }
 function findExtractionData(id) { return GAME_DATA.extraction.units.find((u) => u.sourceEnemyId === id) || null; }
+/* ---------- 카드 해금 ---------- */
+// 처음부터 쓰는 카드 (unlockAfterChapter 없음)
+function baseShadowIds() { return GAME_DATA.shadows.filter((s) => !s.unlockAfterChapter).map((s) => s.id); }
+// 저장 기록 기준 쓸 수 있는 카드: 기본 카드 + 해금 챕터를 클리어한 카드
+function getUnlockedShadowIds(save) {
+  return GAME_DATA.shadows.filter((s) => !s.unlockAfterChapter || (save && save.cleared[s.unlockAfterChapter])).map((s) => s.id);
+}
+function maxBasicFor(shadowIds) {
+  const extra = shadowIds.filter((id) => { const d = findShadowData(id); return d && d.unlockAfterChapter; }).length;
+  return GAME_DATA.config.maxBasic + extra;
+}
+// 그 챕터를 클리어하면 생기는 카드
+function rewardShadowsFor(chapterId) { return GAME_DATA.shadows.filter((s) => s.unlockAfterChapter === chapterId); }
+// 그 챕터에서 처음 나오는 적 종류 (앞 챕터들에 없던 적)
+function newEnemiesIn(chapterId) {
+  const seen = new Set();
+  for (const ch of GAME_DATA.chapters) {
+    const here = new Set();
+    for (const w of ch.waves) for (const en of w.enemies) here.add(en.enemyId);
+    if (ch.chapterId === chapterId) return [...here].filter((id) => !seen.has(id)).map(findEnemyData).filter(Boolean);
+    here.forEach((id) => seen.add(id));
+  }
+  return [];
+}
+
 function getChapter(chapterId)  { return GAME_DATA.chapters.find((c) => c.chapterId === chapterId) || null; }
 function getWaveCount(state)    { const ch = getChapter(state.chapterId); return ch ? ch.waves.length : 0; }
 function getWaveData(state, waveNumber) {
@@ -403,8 +296,8 @@ function canSummon(state, shadowId, x, y) {
   if (!isFieldActive(state)) return { ok: false, reason: 'INVALID_STATUS' };
   if (!shadowId) return { ok: false, reason: 'NO_SELECTION' };
   const data = findShadowData(shadowId);
-  if (!data) return { ok: false, reason: 'INVALID_SHADOW' };
-  if (countBasic(state) >= GAME_DATA.config.maxBasic) return { ok: false, reason: 'BASIC_FULL' };
+  if (!data || !state.availableShadowIds.includes(shadowId)) return { ok: false, reason: 'INVALID_SHADOW' };   // 아직 해금 안 된 카드 포함
+  if (countBasic(state) >= state.maxBasic) return { ok: false, reason: 'BASIC_FULL' };
   if (countArmy(state) >= GAME_DATA.config.maxArmy) return { ok: false, reason: 'ARMY_FULL' };
   const placeError = checkPlacement(state, x, y);
   if (placeError) return { ok: false, reason: placeError };
@@ -436,6 +329,7 @@ function makeBasicUnit(state, d, x, y) {
     attackInterval: d.attackInterval,
     attackRange: d.attackRange,
     targetType: d.targetType,
+    splashRadius: d.splashRadius || 0,
     cooldown: 0,          // 생성 직후 첫 공격 가능
     alive: true,
     energyCostPaid: d.cost, // 실제 소비 에너지 → 회수·해체 반환 기준
@@ -620,6 +514,7 @@ function makeExtractedUnit(state, data, x, y) {
     moveSpeed: data.moveSpeed,
     attackRange: data.attackRange,
     attackInterval: data.attackInterval,
+    targetType: data.targetType || 'single',
     detectionRadius: ex.detectionRadius,
     maxRoamRadius: ex.maxRoamRadius,
     targetId: null,
@@ -647,6 +542,9 @@ function createEnemy(state, enemyId, spawnIndex) {
     moveSpeed: d.moveSpeed,
     attackInterval: d.attackInterval,
     attackRange: d.attackRange,
+    targetType: d.targetType || 'single',
+    coreStandoff: d.coreStandoff || 0,   // 원거리형: 거점에서 이만큼 떨어진 둘레에 서서 공격
+    moveWhileAttacking: !!d.moveWhileAttacking,   // 원거리형: 쏘면서 계속 전진
     cooldown: 0,
     alive: true,
     atCore: false,   // 거점에 붙어 거점을 공격하는 중 (처치될 때까지 계속)
@@ -663,7 +561,12 @@ function findBasicTargets(state, unit) {
   const inRange = state.enemies.filter((e) => e.alive && dist(e.x, e.y, unit.x, unit.y) <= unit.attackRange);
   if (inRange.length === 0) return [];
   inRange.sort((a, b) => (dist(a.x, a.y, core.x, core.y) - dist(b.x, b.y, core.x, core.y)) || (a.uid - b.uid));
-  return unit.targetType === 'all_in_range' ? inRange : [inRange[0]];
+  if (unit.targetType === 'all_in_range') return inRange;
+  const main = inRange[0];
+  if (unit.targetType === 'splash') {   // 첫 대상 + 그 주변 splashRadius 안의 적 (사거리 밖이어도 폭발에 휘말림)
+    return [main].concat(state.enemies.filter((e) => e.alive && e !== main && dist(e.x, e.y, main.x, main.y) <= unit.splashRadius));
+  }
+  return [main];
 }
 
 // 적: 사거리 내 가장 가까운 그림자(기본·추출) → 동률이면 먼저 생성된 그림자
@@ -795,9 +698,9 @@ function serializeRun(state) {
 }
 
 // 저장된 진행 상황 → 다음 웨이브 배치 준비(PREPARATION) 상태. 이전 웨이브의 그림자라 회수는 불가
-function restoreRun(run) {
+function restoreRun(run, availableShadowIds) {
   const C = GAME_DATA.config;
-  const state = createInitialState(run.chapterId);
+  const state = createInitialState(run.chapterId, availableShadowIds);
   state.wave = run.wave;
   state.energy = Math.max(0, Math.min(C.maxEnergy, Math.round(run.energy)));
   state.coreHp = Math.max(1, Math.min(C.coreHp, Math.round(run.coreHp)));
@@ -806,7 +709,7 @@ function restoreRun(run) {
   setStatus(state, STATUS.PREPARATION);
   for (const b of run.basic) {
     const d = findShadowData(b.typeId);
-    if (!d || !isNum(b.x) || !isNum(b.y)) continue;
+    if (!d || !isNum(b.x) || !isNum(b.y) || countBasic(state) >= state.maxBasic) continue;
     const u = makeBasicUnit(state, d, b.x, b.y);
     if (isNum(b.hp)) u.hp = Math.max(1, Math.min(d.maxHp, Math.round(b.hp)));
     if (isNum(b.energyCostPaid)) u.energyCostPaid = b.energyCostPaid;
@@ -834,9 +737,10 @@ function recordChapterClear(save, state) {
   const next = getNextChapter(id);
   const unlockedNext = next && !isChapterUnlocked(save, next.chapterId) ? next : null;
   const newRecord = !prev || run.coreHp > prev.best.coreHp;
+  const unlockedCards = prev ? [] : rewardShadowsFor(id);   // 처음 클리어할 때만 카드 해금
   save.cleared[id] = { best: newRecord ? run : prev.best };
   delete save.resume[id];
-  return { firstClear: !prev, newRecord, unlockedNext };
+  return { firstClear: !prev, newRecord, unlockedNext, unlockedCards, maxBasic: maxBasicFor(getUnlockedShadowIds(save)) };
 }
 
 /* ---------- 일시정지 ----------
@@ -917,7 +821,8 @@ function updateEnemyMovement(state, dt) {
   const core = GAME_DATA.field.core;
   for (const e of state.enemies) {
     if (!e.alive) continue;
-    e.moving = !e.atCore && !findEnemyTarget(state, e);   // 사거리 안에 그림자가 있거나 거점에 붙었으면 멈춤
+    // 사거리 안에 그림자가 있거나 거점에 붙었으면 멈춤 (원거리형은 쏘면서 거점 둘레까지 계속 이동)
+    e.moving = !e.atCore && (e.moveWhileAttacking || !findEnemyTarget(state, e));
     if (!e.moving) continue;
     if (e.coreSlot !== null) {        // 거점 둘레를 따라 자기 자리로 이동 중
       moveToCoreSlot(e, core, e.moveSpeed * dt);
@@ -925,7 +830,7 @@ function updateEnemyMovement(state, dt) {
     }
     faceToward(e, core.x);
     moveToward(e, core.x, core.y, e.moveSpeed * dt, 0);
-    if (dist(e.x, e.y, core.x, core.y) <= core.radius + e.radius) {
+    if (dist(e.x, e.y, core.x, core.y) <= coreRingRadius(e, core)) {
       // 사라지지 않고 거점 둘레의 빈자리를 잡아 멈춰서 공격 (processEnemyAttacks)
       e.coreSlot = pickCoreSlot(state, e, core);
       moveToCoreSlot(e, core, 0);
@@ -936,17 +841,21 @@ function updateEnemyMovement(state, dt) {
 // 거점 둘레 자리 잡기: 도착한 방향에서 가장 가까운, 다른 적과 겹치지 않는 각도를 고름
 //  (도착 각도 → +1칸 → -1칸 → +2칸 … 순서). 둘레가 꽉 차면 도착 각도 그대로 (겹침 허용)
 const CORE_SLOT_GAP = 2;   // 이웃한 적 사이 여유(px)
+// 적이 서는 거점 둘레 반경: 거점 + 자기 크기 (+ 원거리형은 떨어져 서는 거리)
+function coreRingRadius(e, core) { return core.radius + e.radius + (e.coreStandoff || 0); }
 function pickCoreSlot(state, e, core) {
-  const R = core.radius + e.radius;
+  const R = coreRingRadius(e, core);
   const a0 = Math.atan2(e.y - core.y, e.x - core.x);
-  const others = state.enemies.filter((o) => o !== e && o.alive && o.coreSlot !== null);
+  // 같은 둘레(반경이 비슷한)에 선 적끼리만 자리를 나눔 → 근접형과 원거리형은 서로 막지 않음
+  const others = state.enemies.filter((o) => o !== e && o.alive && o.coreSlot !== null &&
+    Math.abs(coreRingRadius(o, core) - R) < e.radius + o.radius);
   const step = (e.radius * 2 + CORE_SLOT_GAP) / R;
   const tries = Math.floor(Math.PI / step);
   for (let i = 0; i <= tries; i++) {
     for (const sign of i === 0 ? [1] : [1, -1]) {
       const a = a0 + sign * i * step;
       const free = others.every((o) => {
-        const need = (e.radius + o.radius + CORE_SLOT_GAP) / ((R + core.radius + o.radius) / 2);
+        const need = (e.radius + o.radius + CORE_SLOT_GAP) / ((R + coreRingRadius(o, core)) / 2);
         return Math.abs(angleDiff(a, o.coreSlot)) >= need;
       });
       if (free) return a;
@@ -957,7 +866,7 @@ function pickCoreSlot(state, e, core) {
 
 // 거점 둘레(반경 = 거점 + 자기 크기)를 따라 자리 각도로 step(px)만큼 이동. 도착하면 atCore = true
 function moveToCoreSlot(e, core, step) {
-  const R = core.radius + e.radius;
+  const R = coreRingRadius(e, core);
   const cur = Math.atan2(e.y - core.y, e.x - core.x);
   const d = angleDiff(e.coreSlot, cur);
   const move = Math.min(Math.abs(d), step / R);
@@ -1046,7 +955,12 @@ function processShadowAttacks(state) {
       if (applyDamage(t, dmg)) killed.push(t);
       t.hitAt = state.elapsed;   // 피격 애니메이션용
       // 이펙트 그림은 유닛 앞에 1번만 (범위 공격이라도 겹쳐 그리지 않음). 이펙트가 없으면 대상마다 공격 선
-      if (!fxStyle || ti === 0) addEffect(state, u.x, u.y, t.x, t.y, 'shadow', fxStyle).facing = u.facing;
+      if (!fxStyle || ti === 0) {
+        const fx = addEffect(state, u.x, u.y, t.x, t.y, 'shadow', fxStyle);
+        fx.facing = u.facing;
+        fx.radius = u.targetType === 'splash' ? u.splashRadius : u.attackRange;   // 폭발 원 크기 (blast)
+        fx.atTarget = u.targetType === 'splash';   // 카이셀: 맞은 적 위에서 폭발
+      }
     });
     u.attackAt = state.elapsed;
     u.cooldown = u.attackInterval;
@@ -1056,11 +970,20 @@ function processShadowAttacks(state) {
     if (!s.alive || s.aiState !== AI.ATTACK || s.cooldown > 0) continue;
     const t = state.enemies.find((e) => e.uid === s.targetId);
     if (!t || !t.alive || dist(s.x, s.y, t.x, t.y) > s.attackRange) continue;
-    if (applyDamage(t, calcDamage(s.attack))) killed.push(t);   // 추출 그림자의 처치도 잔영 생성
-    t.hitAt = state.elapsed;
+    // 광역형의 그림자: 사거리 안 적 전부, 그 밖에는 추격 대상 하나
+    const hits = s.targetType === 'all_in_range'
+      ? state.enemies.filter((e) => e.alive && dist(s.x, s.y, e.x, e.y) <= s.attackRange)
+      : [t];
+    const dmg = calcDamage(s.attack);
+    for (const e of hits) {
+      if (applyDamage(e, dmg)) killed.push(e);   // 추출 그림자의 처치도 잔영 생성
+      e.hitAt = state.elapsed;
+    }
     s.attackAt = state.elapsed;   // 공격 애니메이션용
     faceToward(s, t.x);           // 그림 방향(표시 전용): 공격하는 적 쪽
-    addEffect(state, s.x, s.y, t.x, t.y, 'extracted', findEnemyData(s.sourceEnemyId).attackFx).facing = s.facing;
+    const fx = addEffect(state, s.x, s.y, t.x, t.y, 'extracted', findEnemyData(s.sourceEnemyId).attackFx);
+    fx.facing = s.facing;
+    fx.radius = s.attackRange;
     s.cooldown = s.attackInterval;
   }
   return killed;
@@ -1079,18 +1002,34 @@ function processEnemyAttacks(state) {
       state.coreHitAt = state.elapsed;   // 거점 흔들림 연출용 (표시 전용)
       faceToward(e, core.x);
       e.attackAt = state.elapsed;
-      addEffect(state, e.x, e.y, core.x, core.y, 'enemy', findEnemyData(e.typeId).attackFx).facing = e.facing;
+      // 탄환은 거점 가장자리까지 날아감 (근접형은 원래대로 거점 쪽)
+      const d = dist(e.x, e.y, core.x, core.y) || 1;
+      const hx = core.x + (e.x - core.x) / d * core.radius * 0.7, hy = core.y + (e.y - core.y) / d * core.radius * 0.7;
+      const cfx = addEffect(state, e.x, e.y, hx, hy, 'enemy', findEnemyData(e.typeId).attackFx);
+      cfx.facing = e.facing;
+      cfx.radius = e.attackRange;
       e.cooldown = e.attackInterval;
       continue;
     }
-    const died = applyDamage(target, calcDamage(e.attack));
-    target.hitAt = state.elapsed;
-    if (died) addCorpse(state, target);   // 그림자 사망 연출 (스프라이트가 있는 유닛만 그려짐)
+    // 광역형: 사거리 안 그림자 전부 / 그 밖: 가장 가까운 그림자 하나
+    const hits = e.targetType === 'all_in_range' ? findEnemyTargetsInRange(state, e) : [target];
+    const dmg = calcDamage(e.attack);
+    for (const t of hits) {
+      const died = applyDamage(t, dmg);
+      t.hitAt = state.elapsed;
+      if (died) addCorpse(state, t);   // 그림자 사망 연출 (스프라이트가 있는 유닛만 그려짐)
+    }
     faceToward(e, target.x);
     e.attackAt = state.elapsed;   // 공격 애니메이션용
-    addEffect(state, e.x, e.y, target.x, target.y, 'enemy', findEnemyData(e.typeId).attackFx).facing = e.facing;
+    const fx = addEffect(state, e.x, e.y, target.x, target.y, 'enemy', findEnemyData(e.typeId).attackFx);
+    fx.facing = e.facing;
+    fx.radius = e.attackRange;
     e.cooldown = e.attackInterval;
   }
+}
+
+function findEnemyTargetsInRange(state, enemy) {
+  return getAllShadows(state).filter((s) => s.alive && dist(enemy.x, enemy.y, s.x, s.y) <= enemy.attackRange);
 }
 
 /* ---------- 애니메이션용 표시 정보 (게임 규칙에는 영향 없음) ---------- */
@@ -1138,7 +1077,7 @@ function checkWaveComplete(state) {
 
 // 공격 연출 (게임 규칙에 영향 없음). style: 없으면 공격 선, 'claw'면 할퀴기 자국
 const LINE_FX_TIME = 0.12;
-const ATTACK_FX_TIME = { claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
+const ATTACK_FX_TIME = { claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36, bolt: 0.28, blast: 0.4 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
 function addEffect(state, x1, y1, x2, y2, kind, style) {
   const ttl = ATTACK_FX_TIME[style] || LINE_FX_TIME;
   const fx = { x1, y1, x2, y2, kind, style, ttl, life: ttl };
@@ -1183,14 +1122,20 @@ function validateGameData(data) {
     for (const k of ['cost', 'maxHp', 'attack', 'attackInterval', 'attackRange']) {
       if (!isPos(s[k])) errors.push(`shadows ${s.id}: ${k} 값이 올바르지 않습니다 (${s[k]}).`);
     }
-    if (!['single', 'all_in_range'].includes(s.targetType)) errors.push(`shadows ${s.id}: targetType은 single 또는 all_in_range 입니다.`);
+    if (!['single', 'all_in_range', 'splash'].includes(s.targetType)) errors.push(`shadows ${s.id}: targetType은 single · all_in_range · splash 입니다.`);
+    if (s.targetType === 'splash' && !isPos(s.splashRadius)) errors.push(`shadows ${s.id}: splash 공격은 splashRadius가 필요합니다.`);
+    if (s.unlockAfterChapter !== undefined && !(data.chapters || []).some((ch) => ch.chapterId === s.unlockAfterChapter)) errors.push(`shadows ${s.id}: unlockAfterChapter ${s.unlockAfterChapter} 챕터가 없습니다.`);
   }
+  const extraCards = data.shadows.filter((s) => s.unlockAfterChapter !== undefined).length;
+  if (c.maxBasic + extraCards > c.maxArmy) errors.push('config: 카드를 모두 해금했을 때 기본 그림자 최대 수가 maxArmy를 넘습니다.');
   for (const e of data.enemies) {
     if (ids.has(e.id)) errors.push(`enemies: 중복 ID ${e.id}`);
     ids.add(e.id);
     for (const k of ['maxHp', 'attack', 'moveSpeed', 'attackInterval', 'attackRange', 'radius']) {
       if (!isPos(e[k])) errors.push(`enemies ${e.id}: ${k} 값이 올바르지 않습니다 (${e[k]}).`);
     }
+    if (e.targetType !== undefined && !['single', 'all_in_range'].includes(e.targetType)) errors.push(`enemies ${e.id}: targetType은 single 또는 all_in_range 입니다.`);
+    if (e.coreStandoff !== undefined && !(typeof e.coreStandoff === 'number' && e.coreStandoff >= 0)) errors.push(`enemies ${e.id}: coreStandoff는 0 이상 숫자여야 합니다.`);
   }
 
   const ex = data.extraction;
@@ -1203,6 +1148,7 @@ function validateGameData(data) {
   }
   for (const u of ex.units) {
     if (!data.enemies.some((e) => e.id === u.sourceEnemyId)) errors.push(`extraction.units: 없는 적 ID ${u.sourceEnemyId}`);
+    if (u.targetType !== undefined && !['single', 'all_in_range'].includes(u.targetType)) errors.push(`extraction.units ${u.sourceEnemyId}: targetType은 single 또는 all_in_range 입니다.`);
     for (const k of ['cost', 'maxHp', 'attack', 'moveSpeed', 'attackRange', 'attackInterval']) {
       if (!isPos(u[k])) errors.push(`extraction.units ${u.sourceEnemyId}: ${k} 값이 올바르지 않습니다 (${u[k]}).`);
     }
@@ -1215,6 +1161,7 @@ function validateGameData(data) {
     if (!Number.isInteger(ch.chapterId) || ch.chapterId < 1) errors.push(`${at}: chapterId는 1 이상의 정수여야 합니다.`);
     if (chapterIds.has(ch.chapterId)) errors.push(`${at}: 중복 chapterId ${ch.chapterId}`);
     chapterIds.add(ch.chapterId);
+    if (ch.theme && ch.theme.map !== null && ch.theme.map !== undefined && typeof ch.theme.map !== 'string') errors.push(`${at}: theme.map은 경로 문자열 또는 null 입니다.`);
     if (!ch.waves || !ch.waves.length) { errors.push(`${at}: 웨이브가 없습니다.`); return; }
     ch.waves.forEach((w, i) => {
       if (!isPos(w.spawnInterval)) errors.push(`${at}.waves[${i}]: spawnInterval 값이 올바르지 않습니다.`);
@@ -1293,8 +1240,7 @@ function buildCrackGlow(img) {
 }
 
 // 평소에는 출현 지점마다 박자를 달리해 은은하게 맥동, 적이 나오면 번쩍였다가 사그라듦
-function drawCrackGlow(ctx, view) {
-  const glow = view.crackGlow;
+function drawCrackGlow(ctx, view, glow) {
   if (!glow) return;
   const k = CRACK_BLUR_SCALE;
   ctx.save();
@@ -1428,7 +1374,12 @@ const HIT_SHAKE_HZ = 28;       // 흔들림 빠르기
 const GROUND_SHADOW = '#05030a';            // 적 발밑 그림자 색
 const GROUND_SHADOW_EXTRACTED = '#1a0838';  // 추출 그림자 발밑 그림자 색 (보랏빛)
 
-function spriteFor(typeId) {
+// 챕터별 모습: SPRITES에 'EN_001@ch2'처럼 '종류@ch챕터' 이름으로 넣으면 그 챕터에서 우선 사용 (없거나 못 불러오면 기본 모습)
+function spriteFor(typeId, chapterId) {
+  if (chapterId !== undefined) {
+    const skin = SPRITES[`${typeId}@ch${chapterId}`];
+    if (skin && skin.img) return skin;
+  }
   const cfg = SPRITES[typeId];
   return cfg && cfg.img ? cfg : null;
 }
@@ -1803,6 +1754,91 @@ const REMNANT_FX = {
   ring: { rx: 21, ry: 7 },
 };
 
+// 그림 파일 없이 코드로 그리는 기본 공격 연출 (원거리 탄환·폭발 원). 전용 이펙트 그림이 생기면 ATTACK_FX로 바꿀 수 있음
+//  색: 적은 주황·붉은빛, 기본 그림자는 카드 색 계열, 추출 그림자는 보랏빛
+const PROC_FX_COLORS = {
+  bolt:  { enemy: [255, 170, 70],  shadow: [255, 140, 60], extracted: [200, 160, 255] },
+  blast: { enemy: [255, 90, 60],   shadow: [110, 215, 255], extracted: [190, 150, 255] },
+};
+const PROC_FX = {
+  // 탄환: 쏜 쪽에서 맞은 쪽으로 날아가며 꼬리를 남기고, 끝에서 작게 터짐
+  bolt(ctx, fx) {
+    const c = PROC_FX_COLORS.bolt[fx.kind] || PROC_FX_COLORS.bolt.enemy;
+    const p = Math.min(1, (fx.life - fx.ttl) / fx.life);
+    const t = Math.min(1, p / 0.8);
+    const x1 = fx.x1, y1 = fx.y1 - 10, x2 = fx.x2, y2 = fx.y2 - 8;
+    const x = x1 + (x2 - x1) * t, y = y1 + (y2 - y1) * t;
+    ctx.save();
+    ctx.lineCap = 'round';
+    if (t < 1) {
+      const tt = Math.max(0, t - 0.25);
+      ctx.strokeStyle = rgba(c, 0.55);
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x1 + (x2 - x1) * tt, y1 + (y2 - y1) * tt);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+      ctx.shadowColor = rgba(c, 0.9);
+      ctx.shadowBlur = 8;
+      ctx.fillStyle = rgba(c, 1);
+      drawCircle(ctx, x, y, 3.5); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      drawCircle(ctx, x, y, 1.5); ctx.fill();
+    } else {
+      const q = (p - 0.8) / 0.2;
+      ctx.strokeStyle = rgba(c, 1 - q);
+      ctx.lineWidth = 2;
+      drawCircle(ctx, x2, y2, 4 + q * 8); ctx.stroke();
+    }
+    ctx.restore();
+  },
+  // 폭발 원: 가운데에서 범위만큼 퍼지며 옅어짐. atTarget이면 맞은 적 위(카이셀), 아니면 공격한 쪽 둘레(광역형)
+  blast(ctx, fx) {
+    const c = PROC_FX_COLORS.blast[fx.kind] || PROC_FX_COLORS.blast.enemy;
+    const p = Math.min(1, (fx.life - fx.ttl) / fx.life);
+    const cx = fx.atTarget ? fx.x2 : fx.x1, cy = fx.atTarget ? fx.y2 : fx.y1;
+    const R = (fx.radius || 40) * (0.35 + 0.65 * Math.sqrt(p));
+    ctx.save();
+    ctx.fillStyle = rgba(c, 0.22 * (1 - p));
+    ctx.beginPath(); ctx.ellipse(cx, cy + 4, R, R * 0.55, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = rgba(c, 0.9 * (1 - p));
+    ctx.lineWidth = 2;
+    ctx.shadowColor = rgba(c, 0.8);
+    ctx.shadowBlur = 8;
+    ctx.beginPath(); ctx.ellipse(cx, cy + 4, R, R * 0.55, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  },
+};
+
+// 챕터 배경 맵: 경로별로 한 번만 불러와 보관. status: loading → ok / fail
+const mapCache = {};
+function loadMap(src) {
+  if (!src || mapCache[src]) return mapCache[src] || null;
+  const entry = { img: null, crackGlow: null, status: 'loading' };
+  mapCache[src] = entry;
+  const img = new Image();
+  img.onload = () => {
+    entry.img = img;
+    entry.status = 'ok';
+    if (src === MAP_IMAGE_SRC) entry.crackGlow = buildCrackGlow(img);   // 균열 빛은 기본 맵에서만 뽑음
+  };
+  img.onerror = () => { entry.status = 'fail'; console.warn(`[맵 이미지 불러오기 실패] ${src}`); };
+  img.src = src;
+  return entry;
+}
+
+// 챕터의 배경: 전용 맵을 불러왔으면 그것, 아니면 기본 맵(신전) + 연출. tint는 있으면 항상 덮음
+function currentMapTheme(chapterId) {
+  const ch = getChapter(chapterId);
+  const th = (ch && ch.theme) || {};
+  const base = mapCache[MAP_IMAGE_SRC];
+  const own = th.map ? mapCache[th.map] : null;
+  if (own && own.status === 'ok' && th.map !== MAP_IMAGE_SRC) {
+    return { img: own.img, tint: th.tint || null, decor: th.decor === 'temple', crackGlow: base && base.crackGlow };
+  }
+  return { img: base && base.img, tint: th.tint || null, decor: true, crackGlow: base && base.crackGlow };
+}
+
 // 중앙 거점 오브젝트 (assets/sprites/core.png, 104×101 도트). 파일이 없으면 기존 원형으로 그림
 //  - 옆면 두께까지 포함한 전체 모양의 가운데를 거점 좌표(= 맵 중앙 문양)에 맞춤. 판정(반경 45)은 그대로
 //  - 돌 색은 맵 석상 얼굴 돌 색에 맞춘 그림 (푸른 빛은 원본 그대로)
@@ -1950,16 +1986,23 @@ function render(ctx, state, view) {
   // 캔버스 실제 해상도(고해상도 화면이면 2배)와 상관없이 항상 전장 좌표(960×588)로 그림
   ctx.setTransform(ctx.canvas.width / F.width, 0, 0, ctx.canvas.height / F.height, 0, 0);
 
-  if (view.mapImage) {
+  const theme = currentMapTheme(state.chapterId);   // 챕터 배경 (맵 그림이 없으면 기본 맵 + 색)
+  if (theme.img) {
     // 맵 디자인 이미지를 전장 크기에 맞춰 그림 (판정 좌표와는 별개)
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(view.mapImage, 0, 0, F.width, F.height);
+    ctx.drawImage(theme.img, 0, 0, F.width, F.height);
     ctx.fillStyle = COLORS.mapShade;   // 유닛이 잘 보이도록 살짝 어둡게
     ctx.fillRect(0, 0, F.width, F.height);
-    drawMapFlames(ctx, view.time);     // 불꽃 일렁임 (유닛보다 아래에 그림)
-    drawStatueEyes(ctx, view.time);    // 석상 눈빛 맥동
-    drawCrackGlow(ctx, view);          // 출현 균열 빛 (적이 나올 때 번쩍)
+    if (theme.tint) {                  // 챕터 분위기 색 (전용 맵이 없을 때 기본 맵 위에 덮음)
+      ctx.fillStyle = theme.tint;
+      ctx.fillRect(0, 0, F.width, F.height);
+    }
+    if (theme.decor) {                 // 기본 맵(신전) 전용 연출: 위치가 기본 맵 그림에 맞춰져 있음
+      drawMapFlames(ctx, view.time);   // 불꽃 일렁임 (유닛보다 아래에 그림)
+      drawStatueEyes(ctx, view.time);  // 석상 눈빛 맥동
+      drawCrackGlow(ctx, view, theme.crackGlow);   // 출현 균열 빛 (적이 나올 때 번쩍)
+    }
   } else {
     // 이미지를 불러오지 못했을 때의 기본 배경 + 격자
     ctx.fillStyle = COLORS.bg;
@@ -2102,7 +2145,7 @@ function render(ctx, state, view) {
 
   // 사망 애니메이션 (적·추출 그림자). 북쪽 출현 적은 출현 연출과 같은 선 아래만 그림
   for (const c of state.corpses) {
-    const cfg = spriteFor(c.typeId);
+    const cfg = spriteFor(c.typeId, state.chapterId);
     if (!cfg) continue;
     const t = state.elapsed - c.diedAt;
     const anim = cfg.anims.death;
@@ -2122,7 +2165,7 @@ function render(ctx, state, view) {
     const src = findEnemyData(s.sourceEnemyId);
     const r = s.radius;
     const spawnRatio = s.aiState === AI.SPAWN ? 1 - s.spawnTimer / GAME_DATA.extraction.spawnDelay : 1;
-    const cfg = spriteFor(s.sourceEnemyId);
+    const cfg = spriteFor(s.sourceEnemyId, state.chapterId);
     if (cfg) {   // 스프라이트가 있으면 적 그림을 보랏빛 그림자로 물들여서 그림
       const pick = pickAnim(s, state.elapsed, s.aiState === AI.CHASE || s.aiState === AI.RETURN, cfg, s.aiState === AI.ATTACK);
       const alpha = 0.35 + 0.65 * Math.max(0, Math.min(1, spawnRatio));
@@ -2165,7 +2208,7 @@ function render(ctx, state, view) {
   for (const e of state.enemies) {
     const d = findEnemyData(e.typeId);
     const clipTop = spawnClipTop(e.spawn);   // 출현 연출: 지정한 선 위쪽은 가려서 벽 아래에서 나오는 것처럼
-    const cfg = spriteFor(e.typeId);
+    const cfg = spriteFor(e.typeId, state.chapterId);
     if (cfg) {   // 스프라이트: 이동·공격·피격 애니메이션
       const pick = pickAnim(e, state.elapsed, e.moving, cfg, !e.moving);
       withClip(ctx, clipTop, () => {
@@ -2194,6 +2237,7 @@ function render(ctx, state, view) {
 
   // 공격 선 / 할퀴기 자국
   for (const fx of state.effects) {
+    if (PROC_FX[fx.style]) { PROC_FX[fx.style](ctx, fx); continue; }   // 그림 없이 코드로 그리는 탄환·폭발
     if (ATTACK_FX[fx.style]) {   // 이펙트 시트가 있는 공격은 공격 선 없이 이펙트만
       if (drawAttackFx(ctx, fx)) continue;
       if (fx.ttl < fx.life - LINE_FX_TIME) continue;   // 이펙트 파일이 없으면 처음 잠깐만 공격 선
@@ -2246,8 +2290,6 @@ const game = {
   // confirmDismantleUid: 해체 확인 단계에 들어간 그림자 (UI 전용 상태)
   view: {
     mouse: null, hoverRemnantUid: null, hoverUnitUid: null, showRanges: false, time: 0, confirmDismantleUid: null,
-    mapImage: null,
-    crackGlow: null,                // 균열만 뽑아낸 빛 이미지 (맵 불러온 뒤 생성)
     crackFlash: [0, 0, 0, 0],       // 출현 지점별 번쩍임 세기 (적이 나올 때 1 → 서서히 0)
   },
   toastTimer: null,
@@ -2311,10 +2353,16 @@ function hideToast() {
   game.ui.toast.className = 'toast';
 }
 
+// 이번 판에 쓸 수 있는 카드만 표시 (챕터 보상으로 해금된 카드 포함). 숫자 키 = 카드 순서
 function buildShadowCards() {
   const wrap = game.ui.cards;
+  const ids = game.state.availableShadowIds;
+  if (wrap.dataset.ids === ids.join(',')) return;   // 같은 카드 구성이면 다시 만들지 않음
+  wrap.dataset.ids = ids.join(',');
   wrap.innerHTML = '';
-  GAME_DATA.shadows.forEach((s, i) => {
+  wrap.style.setProperty('--cols', ids.length <= 4 ? ids.length : 3);   // 5장 이상은 3열 2줄
+  wrap.classList.toggle('compact', ids.length > 4);
+  ids.map(findShadowData).forEach((s, i) => {
     const btn = document.createElement('button');
     btn.className = 'card';
     btn.type = 'button';
@@ -2362,7 +2410,7 @@ function onSecondaryClick(evt) {
     if (unit) {
       const result = recallShadow(game.state, unit);
       if (result.ok) showToast(`${findShadowData(result.unit.typeId).name} 회수 (에너지 +${result.refund})`, 'ok');
-      else showToast(REASON_TEXT[result.reason] || result.reason, 'warn');
+      else showToast(reasonText(result, game.state), 'warn');
       return;
     }
   }
@@ -2420,7 +2468,7 @@ function onCanvasClick(evt) {
   if (st.selectedShadowId) {
     const result = summonShadow(st, st.selectedShadowId, p.x, p.y);
     if (result.ok) showToast(`${findShadowData(result.unit.typeId).name} 소환`, 'ok');
-    else showToast(REASON_TEXT[result.reason] || result.reason, 'warn');
+    else showToast(reasonText(result, game.state), 'warn');
     return;
   }
   // 빈 곳 클릭: 패널 닫기
@@ -2441,7 +2489,7 @@ function onDismantleConfirm() {
       : `${findEnemyData(result.unit.sourceEnemyId).name} 그림자`;
     showToast(`${name} 해체 (에너지 +${result.gained})`, 'ok');
   } else {
-    showToast(REASON_TEXT[result.reason] || result.reason, 'warn');
+    showToast(reasonText(result, game.state), 'warn');
   }
 }
 
@@ -2453,7 +2501,7 @@ function onExtract() {
     showToast(`일어나라! ${findEnemyData(result.unit.sourceEnemyId).name} 그림자 추출`, 'ok');
   } else {
     if (result.reason === 'EXTRACT_GONE') st.selectedRemnantUid = null;
-    showToast(REASON_TEXT[result.reason] || result.reason, 'warn');   // 에너지 부족 등: 잔영 유지
+    showToast(reasonText(result, game.state), 'warn');   // 에너지 부족 등: 잔영 유지
   }
 }
 
@@ -2461,7 +2509,7 @@ function onExtract() {
 function newGame(chapterId = game.state.chapterId) {
   delete game.save.resume[chapterId];
   persistSave();
-  setGameState(createInitialState(chapterId));
+  setGameState(createInitialState(chapterId, getUnlockedShadowIds(game.save)));
   setStatus(game.state, STATUS.PREPARATION);
   game.lastStatus = game.state.status;
 }
@@ -2470,7 +2518,7 @@ function newGame(chapterId = game.state.chapterId) {
 function resumeChapter(chapterId) {
   const run = game.save.resume[chapterId];
   if (!run) { newGame(chapterId); return; }
-  setGameState(restoreRun(run));
+  setGameState(restoreRun(run, getUnlockedShadowIds(game.save)));
   showToast(`챕터 ${chapterId} · WAVE ${game.state.wave}부터 이어합니다`, 'ok');
 }
 
@@ -2481,17 +2529,18 @@ function setGameState(state) {
   game.clearInfo = null;
   game.confirmRestartId = null;
   hideToast();   // 이전 판의 메시지가 남지 않도록
+  if (game.ui.cards) buildShadowCards();   // 해금된 카드가 늘었을 수 있음
 }
 
 // 챕터 선택 화면 (READY). 진행 중이던 판은 버림 — 이어하기는 마지막으로 클리어한 웨이브 기준
 function goToChapters() {
-  setGameState(createInitialState(game.state ? game.state.chapterId : undefined));
+  setGameState(createInitialState(game.state ? game.state.chapterId : undefined, getUnlockedShadowIds(game.save)));
   game.screen = 'chapters';
   buildChapterList();
 }
 
 function goToTitle() {
-  setGameState(createInitialState(game.state ? game.state.chapterId : undefined));
+  setGameState(createInitialState(game.state ? game.state.chapterId : undefined, getUnlockedShadowIds(game.save)));
   game.screen = 'title';
 }
 
@@ -2510,6 +2559,10 @@ function buildChapterList() {
     card.className = 'chapter-card' + (unlocked ? '' : ' locked') + (cleared ? ' cleared' : '') + (run ? ' progress' : '');
     const badge = !unlocked ? '잠김' : run ? '진행 중' : cleared ? '클리어' : '도전 가능';
     const lines = [`웨이브 ${ch.waves.length}개`];
+    const fresh = newEnemiesIn(id);
+    if (fresh.length && i > 0) lines.push(`새 적: ${fresh.map((e) => e.name).join(' · ')}`);
+    const rewards = rewardShadowsFor(id);
+    if (rewards.length) lines.push(`클리어 보상: ${rewards.map((r) => `${r.name} 카드`).join(' · ')}${cleared ? ' (획득)' : ''}`);
     if (cleared) lines.push(`최고 기록 · 거점 HP ${cleared.best.coreHp}/${maxHp} · 처치 ${cleared.best.kills}`);
     const prev = GAME_DATA.chapters[i - 1];
     let buttons;
@@ -2600,7 +2653,8 @@ function onKeyDown(evt) {
     return;
   }
   const num = Number(evt.key);
-  if (Number.isInteger(num) && num >= 1 && num <= GAME_DATA.shadows.length) selectShadow(GAME_DATA.shadows[num - 1].id);
+  const ids = game.state.availableShadowIds;
+  if (Number.isInteger(num) && num >= 1 && num <= ids.length) selectShadow(ids[num - 1]);
 }
 
 function onMouseMove(evt) {
@@ -2626,7 +2680,7 @@ function setHidden(el, hidden) { if (el.classList.contains('hidden') !== hidden)
 function hintText(st) {
   switch (st.status) {
     case STATUS.PREPARATION:
-      return `카드를 고르고 전장 빈 곳을 클릭해 기본 그림자를 배치하세요 (최대 ${GAME_DATA.config.maxBasic}기). 남은 잔영은 지금도 추출할 수 있습니다.`;
+      return `카드를 고르고 전장 빈 곳을 클릭해 기본 그림자를 배치하세요 (최대 ${st.maxBasic}기). 남은 잔영은 지금도 추출할 수 있습니다.`;
     case STATUS.PLAYING:
       return '적을 처치하면 그 자리에 잔영이 남습니다. 잔영을 클릭해 그림자를 추출하세요.';
     default:
@@ -2703,12 +2757,12 @@ function syncUI() {
   setText(ui.coreCur, `${st.coreHp}`);
   setText(ui.coreMax, `${st.maxCoreHp}`);
   setText(ui.army, `${countArmy(st)} / ${C.maxArmy}`);
-  setText(ui.armyBasic, `기본 ${countBasic(st)}/${C.maxBasic}`);
+  setText(ui.armyBasic, `기본 ${countBasic(st)}/${st.maxBasic}`);
   setText(ui.status, STATUS_TEXT[st.status]);
   setText(ui.hint, hintText(st));
   ui.coreCur.classList.toggle('danger', st.coreHp <= CORE_HP_LOW);   // 거점 위 숫자와 같은 기준
 
-  const basicFull = countBasic(st) >= C.maxBasic || countArmy(st) >= C.maxArmy;
+  const basicFull = countBasic(st) >= st.maxBasic || countArmy(st) >= C.maxArmy;
   for (const btn of ui.cards.children) {
     const d = findShadowData(btn.dataset.shadowId);
     btn.classList.toggle('selected', st.selectedShadowId === d.id);
@@ -2748,10 +2802,13 @@ function syncUI() {
       setText(ui.btnResultPrimary, next ? '다음 챕터' : '다시 도전');
       setText(ui.btnResultTitle, '챕터 선택');
       const parts = [];
+      if (info.unlockedCards && info.unlockedCards.length) {
+        parts.push(`${info.unlockedCards.map((c) => `${c.name}(${ROLE_TEXT[c.role] || c.role})`).join(' · ')} 카드 획득! 기본 그림자 최대 ${info.maxBasic}기`);
+      }
       if (info.unlockedNext) parts.push(`챕터 ${info.unlockedNext.chapterId} 「${info.unlockedNext.name}」 해금!`);
       if (info.newRecord && !info.firstClear) parts.push('최고 기록 갱신!');
       if (!next) parts.push('모든 챕터를 클리어했습니다');
-      extra = parts.join(' · ');
+      extra = parts.join('\n');   // 안내마다 한 줄씩
     } else {
       setText(ui.resultTitle, '던전 방어 실패');
       setText(ui.resultDesc, `챕터 ${st.chapterId} · WAVE ${st.wave}에서 거점 파괴 · 총 처치 ${s.kills} · 추출 ${s.extractionSuccesses}`);
@@ -2827,17 +2884,11 @@ function boot() {
   };
 
   game.save = loadSave();
-  setGameState(createInitialState());
-  buildShadowCards();
+  setGameState(createInitialState(undefined, getUnlockedShadowIds(game.save)));
 
   // 맵 디자인 이미지. 불러오기 전·실패 시에는 기본 배경으로 그림
-  const mapImage = new Image();
-  mapImage.onload = () => {
-    game.view.mapImage = mapImage;
-    game.view.crackGlow = buildCrackGlow(mapImage);
-  };
-  mapImage.onerror = () => console.warn(`[맵 이미지 불러오기 실패] ${MAP_IMAGE_SRC}`);
-  mapImage.src = MAP_IMAGE_SRC;
+  loadMap(MAP_IMAGE_SRC);
+  for (const ch of GAME_DATA.chapters) if (ch.theme && ch.theme.map) loadMap(ch.theme.map);   // 챕터 전용 맵 (있는 것만)
   loadSprites();   // 캐릭터 스프라이트 (불러오기 전·실패 시에는 원형으로 그림)
   loadFxSheets();  // 공격 이펙트 (불러오기 전·실패 시에는 공격 선)
 

@@ -337,11 +337,19 @@ button { font-family: inherit; }
   margin-top: 12px;
 }
 
+/* 카드 수에 따라 열 수가 바뀜 (--cols: 4장 이하면 한 줄, 5장 이상이면 3열 2줄) */
 #shadow-cards {
-  display: flex;
+  --cols: 3;
+  display: grid;
+  grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
   gap: 10px;
   flex: 1;
+  min-width: 0;
 }
+#shadow-cards.compact { gap: 8px; }
+#shadow-cards.compact .card { padding: 6px 10px 6px 14px; gap: 1px; }
+#shadow-cards.compact .card-name { font-size: 13px; }
+#shadow-cards.compact .card-stats { font-size: 10px; }
 
 .card {
   --card-color: var(--accent);
@@ -553,12 +561,12 @@ h2 {
 #overlay-result[data-kind="wave_clear"] h2 { color: var(--accent-2); text-shadow: 0 0 10px var(--glow); }
 
 /* ---------- 챕터 선택 ---------- */
-.chapter-panel { max-width: 640px; width: calc(100% - 32px); }
+.chapter-panel { max-width: 900px; width: calc(100% - 32px); padding: 14px 24px 20px; }
 .chapter-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 14px;
-  margin: 16px 0 10px;
+  gap: 12px;
+  margin: 12px 0 10px;
   text-align: left;
 }
 .chapter-card {
@@ -591,7 +599,7 @@ h2 {
 .chapter-buttons button { flex: 1; padding: 8px 10px; font-size: 12px; }
 .chapter-buttons button:disabled { cursor: not-allowed; opacity: 0.7; }
 .chapter-note { font-size: 11px; color: var(--sub); margin: 0 0 16px; }
-.result-extra { margin: -12px 0 20px; font-size: 13px; color: var(--key); }
+.result-extra { margin: -12px 0 20px; font-size: 13px; line-height: 1.8; color: var(--key); white-space: pre-line; }
 
 /* ---------- 데이터 오류 ---------- */
 #data-error {
