@@ -1143,7 +1143,7 @@ const SPRITES = {
       death:  { row: 4, frames: 5, fps: 9, groundY: 60 },
     },
   },
-  SH_003: {   // 탱크 (곰). 원본 격자가 고르지 않아 프레임마다 뒤쪽 끝·발끝을 맞춰 80×64 칸으로 정렬
+  SH_003: {   // 탱크 (곰, 갈기 디자인). 프레임마다 뒤쪽 끝·발끝을 맞춰 80×64 칸으로 정렬
     src: 'assets/sprites/sh_003.png',
     cellW: 80, cellH: 64,
     scale: 1,
@@ -1515,22 +1515,22 @@ const ICE_FX = {
   bodyLift: 10,  // 판정 위치에서 위로(px) = 말 머리·단검 높이
   reach: 22,     // 돌격형이 바라보는 쪽으로 떨어진 거리(px)
 };
-// 탱크 발톱 (assets/sprites/fx_bearclaw.png, 69×46 도트 6프레임). 곰이 바라보는 쪽 바로 앞에 내려찍듯 그림
+// 탱크 발톱 (assets/sprites/fx_bearclaw.png, 69×56 도트 6프레임, 세로로 1.22배 늘림). 곰이 바라보는 쪽 바로 앞에 내려찍듯 그림
 const BEARCLAW_FX = {
-  src: 'assets/sprites/fx_bearclaw.png', w: 69, h: 46, frames: 6,
+  src: 'assets/sprites/fx_bearclaw.png', w: 69, h: 56, frames: 6,
   rows: {},
   glow: { shadow: 'rgba(169, 139, 255, 0.6)' },
   bodyLift: 8,   // 판정 위치에서 위로(px) = 앞발 높이
-  reach: 40,     // 곰이 바라보는 쪽으로 떨어진 거리(px)
+  reach: 35,     // 곰이 바라보는 쪽으로 떨어진 거리(px)
   mirror: true,  // 원본 그림을 좌우로 뒤집어서 그림
 };
-// 아이언 방패 내려찍기 (assets/sprites/fx_slam.png, 75×48 도트 6프레임, 보랏빛). 땅에서 솟구치는 충격이라
+// 아이언 방패 내려찍기 (assets/sprites/fx_slam.png, 56×61 도트 6프레임, 보랏빛: 호를 그리며 솟구친 뒤 바닥 균열). 땅에서 솟구치는 충격이라
 // 위아래를 뒤집지 않고, 그림 아래쪽을 아이언 발끝 높이에 맞춰 앞쪽에 그림
 const SLAM_FX = {
-  src: 'assets/sprites/fx_slam.png', w: 75, h: 48, frames: 6,
+  src: 'assets/sprites/fx_slam.png', w: 56, h: 61, frames: 6,
   rows: {},
   glow: { shadow: 'rgba(169, 139, 255, 0.6)' },
-  bodyLift: 10,  // 그림 아래(칸 y 46)가 발끝(판정 위치 +12)에 오도록
+  bodyLift: 14,  // 솟구치는 호의 아래(칸 y 56)가 아이언 발끝(판정 위치 +12)에 오도록. 바닥 균열은 발끝보다 3px 아래로 퍼짐
   reach: 30,     // 아이언이 바라보는 쪽으로 떨어진 거리(px)
   upright: true, // 위아래 반전 안 함
 };
