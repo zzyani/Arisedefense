@@ -99,7 +99,10 @@ const GAME_DATA = {
   //  theme: 배경. map = 맵 그림 경로(못 불러오면 기본 맵 assets/map.webp로 대신 표시), tint = 맵 위에 덮는 색(선택)
   //         맵 그림은 기본 맵과 같은 배치여야 함: 1602×981, 가운데 문양 중심 = (801, 491.5), 북·동·남·서 네 출입구
   //         (assets/maps/는 받은 그림을 문양 중심 기준으로 잘라 이 배치에 맞춘 것)
-  //         decor: 'temple'이면 기본 맵용 불꽃·석상 눈빛·균열 빛 연출을 켬 (다른 맵에서는 위치가 맞지 않음)
+  //         decor: 'temple'이면 기본 맵용 불꽃·석상 눈빛·균열 빛 연출, 'snow'면 설원 숲(ch2) 수정 반짝임·눈·나무 흔들림,
+  //         'orc'면 오크 주둔지(ch3) 횃불 일렁임·해골 눈빛, 'demon'이면 악마성(ch4) 촛불·가고일 눈빛·창문 불 켜고 끄기,
+  //         'ant'면 개미굴(ch5) 굴 안쪽 빛 맥동·바닥 균열 빛(1챕터식)·알 빛,
+  //         'darktemple'이면 카르테논 신전 최종(ch6) 붉은 불꽃·붉은 석상 눈빛(눈동자 움직임)·붉은 균열 빛 (그 맵 그림 위치에 맞춘 연출)
   // 적은 배열 순서대로 spawnInterval 간격으로 생성됩니다 (첫 적은 웨이브 시작 즉시).
   // 북·남 출현 지점은 거점과 가까워(약 235px) 동·서(약 456px)보다 빨리 도착합니다.
   chapters: [
@@ -135,7 +138,7 @@ const GAME_DATA = {
       ] },
     ] },
     { chapterId: 2, name: '설원 숲', desc: '코브라가 섞여 사방에서 동시에 밀려오는 눈 덮인 숲',
-      theme: { map: 'assets/maps/ch2.webp' }, waves: [
+      theme: { map: 'assets/maps/ch2.webp', decor: 'snow' }, waves: [
       { waveId: 1, spawnInterval: 2.2, enemies: [
         { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 1 },
         { enemyId: 'EN_002', spawn: 3 }, { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 },
@@ -171,7 +174,7 @@ const GAME_DATA = {
       ] },
     ] },
     { chapterId: 3, name: '오크 주둔지', desc: '멀리서 쏘는 원거리형이 처음 나타나는 주둔지',
-      theme: { map: 'assets/maps/ch3.webp' }, waves: [
+      theme: { map: 'assets/maps/ch3.webp', decor: 'orc' }, waves: [
       { waveId: 1, spawnInterval: 2.2, enemies: [
         { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_002', spawn: 1 }, { enemyId: 'EN_004', spawn: 0 },
         { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
@@ -206,7 +209,7 @@ const GAME_DATA = {
       ] },
     ] },
     { chapterId: 4, name: '악마성', desc: '주변을 한꺼번에 치는 광역형이 지키는 성',
-      theme: { map: 'assets/maps/ch4.webp' }, waves: [
+      theme: { map: 'assets/maps/ch4.webp', decor: 'demon' }, waves: [
       { waveId: 1, spawnInterval: 2.0, enemies: [
         { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_002', spawn: 1 }, { enemyId: 'EN_004', spawn: 0 },
         { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 1 }, { enemyId: 'EN_005', spawn: 0 },
@@ -245,7 +248,7 @@ const GAME_DATA = {
       ] },
     ] },
     { chapterId: 5, name: '개미굴', desc: '빠르게 파고드는 스피드형이 떼로 몰려오는 굴',
-      theme: { map: 'assets/maps/ch5.webp' }, waves: [
+      theme: { map: 'assets/maps/ch5.webp', decor: 'ant' }, waves: [
       { waveId: 1, spawnInterval: 1.8, enemies: [
         { enemyId: 'EN_006', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
         { enemyId: 'EN_006', spawn: 2 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_004', spawn: 0 },
@@ -288,7 +291,7 @@ const GAME_DATA = {
       ] },
     ] },
     { chapterId: 6, name: '카르테논 신전', desc: '모든 적이 다시 모여드는 마지막 결전',
-      theme: { map: 'assets/maps/ch6.webp' }, waves: [
+      theme: { map: 'assets/maps/ch6.webp', decor: 'darktemple' }, waves: [
       { waveId: 1, spawnInterval: 1.9, enemies: [
         { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_006', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },
         { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_003', spawn: 1 }, { enemyId: 'EN_004', spawn: 0 },

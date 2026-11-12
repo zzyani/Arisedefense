@@ -1210,7 +1210,12 @@ const MAP_FLAMES = [
 const CRACK_BLUR_SCALE = 5;   // 작게 줄였다 늘려서 번지는 빛을 만듦
 const CRACK_RES = 2;          // 균열 선은 2배 해상도로 만들어 고해상도 화면에서도 또렷하게
 
-function buildCrackGlow(img) {
+// 1챕터(기본 맵) 균열 영역 = 출현 지점의 crack 영역 (side = 출현 지점 번호 → 그쪽에서 적이 나오면 번쩍)
+function spawnCrackRects() {
+  return GAME_DATA.field.spawnPoints.map((sp, i) => sp.crack && { ...sp.crack, side: i }).filter(Boolean);
+}
+
+function buildCrackGlow(img, rects = spawnCrackRects()) {
   const F = GAME_DATA.field;
   const W = F.width * CRACK_RES;
   const H = F.height * CRACK_RES;
@@ -1224,9 +1229,7 @@ function buildCrackGlow(img) {
   // 출현 지점 균열 영역만 남기고 나머지는 지움
   c.globalCompositeOperation = 'destination-in';
   c.beginPath();
-  for (const sp of F.spawnPoints) {
-    if (sp.crack) c.rect(sp.crack.x * CRACK_RES, sp.crack.y * CRACK_RES, sp.crack.w * CRACK_RES, sp.crack.h * CRACK_RES);
-  }
+  for (const r of rects) c.rect(r.x * CRACK_RES, r.y * CRACK_RES, r.w * CRACK_RES, r.h * CRACK_RES);
   c.fillStyle = '#fff';
   c.fill();
 
@@ -1236,7 +1239,7 @@ function buildCrackGlow(img) {
   const s = soft.getContext('2d');
   s.imageSmoothingEnabled = true;
   s.drawImage(sharp, 0, 0, soft.width, soft.height);
-  return { sharp, soft };
+  return { sharp, soft, rects };
 }
 
 // 평소에는 출현 지점마다 박자를 달리해 은은하게 맥동, 적이 나오면 번쩍였다가 사그라듦
@@ -1246,11 +1249,9 @@ function drawCrackGlow(ctx, view, glow) {
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
   ctx.imageSmoothingEnabled = true;
-  GAME_DATA.field.spawnPoints.forEach((sp, i) => {
-    const r = sp.crack;
-    if (!r) return;
+  glow.rects.forEach((r, i) => {
     const base = 0.35 + 0.2 * Math.sin(view.time * 1.8 + i * 1.57);
-    const a = Math.min(1, base + view.crackFlash[i] * 0.9);
+    const a = Math.min(1, base + (view.crackFlash[r.side] || 0) * 0.9);
     // 번지는 빛 (작은 이미지를 늘려 그림 → 흐릿하게 퍼짐)
     ctx.globalAlpha = a;
     ctx.drawImage(glow.soft, r.x / k, r.y / k, r.w / k, r.h / k, r.x, r.y, r.w, r.h);
@@ -1607,34 +1608,384 @@ function flameTonguePath(ctx, x, y, w, h, sway) {
   ctx.closePath();
 }
 
+// 불꽃 색: glow = 빛 번짐, outer = 바깥 불꽃 혀, inner = 안쪽 밝은 심
+const FLAME_BLUE   = { glow: [80, 170, 255], glow2: [60, 140, 255], outer: [70, 160, 255], inner: [210, 240, 255] };   // 신전(챕터 1·기본 맵)
+const FLAME_ORANGE = { glow: [255, 150, 60], glow2: [255, 110, 30], outer: [255, 130, 40], inner: [255, 235, 170] };   // 오크 주둔지 횃불·모닥불
+
 // 맵의 불꽃 위에 빛 번짐 + 불꽃 혀를 겹쳐 그려 일렁이는 느낌을 줌 (실제 시간 기준이라 일시정지·준비 중에도 움직임)
-function drawMapFlames(ctx, time) {
+//  - flames: { x, y(불꽃 중심, 전장 좌표), s(크기 배율, 기본 1) }
+function drawMapFlames(ctx, time, flames = MAP_FLAMES, pal = FLAME_BLUE) {
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';   // 빛처럼 밝기를 더하는 혼합
-  MAP_FLAMES.forEach((f, i) => {
+  flames.forEach((f, i) => {
     const seed = i * 1.7;
     const k = flicker(time, seed);
     const k2 = flicker(time * 1.3, seed + 5);
+    const s = f.s || 1;
 
     // 1) 빛 번짐: 반경·밝기가 흔들림
-    const r = 24 + k * 4;
-    const gy = f.y - 2;
+    const r = (24 + k * 4) * s;
+    const gy = f.y - 2 * s;
     const glow = ctx.createRadialGradient(f.x, gy, 0, f.x, gy, r);
-    glow.addColorStop(0, `rgba(80,170,255,${(0.32 + k * 0.08).toFixed(3)})`);
-    glow.addColorStop(0.45, `rgba(60,140,255,${(0.12 + k * 0.04).toFixed(3)})`);
-    glow.addColorStop(1, 'rgba(60,140,255,0)');
+    glow.addColorStop(0, rgba(pal.glow, 0.32 + k * 0.08));
+    glow.addColorStop(0.45, rgba(pal.glow2, 0.12 + k * 0.04));
+    glow.addColorStop(1, rgba(pal.glow2, 0));
     ctx.fillStyle = glow;
     ctx.fillRect(f.x - r, gy - r, r * 2, r * 2);
 
-    // 2) 불꽃 혀: 바깥(하늘색) → 안쪽(흰빛) 두 겹, 높이와 기울기가 따로 흔들림
-    const baseY = f.y + 6;
-    ctx.fillStyle = `rgba(70,160,255,${(0.45 + k2 * 0.1).toFixed(3)})`;
-    flameTonguePath(ctx, f.x, baseY, 4.5, 14 + k * 2.5, k2 * 2.2);
+    // 2) 불꽃 혀: 바깥 → 안쪽(밝은 심) 두 겹, 높이와 기울기가 따로 흔들림
+    const baseY = f.y + 6 * s;
+    ctx.fillStyle = rgba(pal.outer, 0.45 + k2 * 0.1);
+    flameTonguePath(ctx, f.x, baseY, 4.5 * s, (14 + k * 2.5) * s, k2 * 2.2 * s);
     ctx.fill();
-    ctx.fillStyle = `rgba(210,240,255,${(0.55 + k * 0.15).toFixed(3)})`;
-    flameTonguePath(ctx, f.x, baseY + 1, 2.4, 7.5 + k2 * 1.5, k * 1.2);
+    ctx.fillStyle = rgba(pal.inner, 0.55 + k * 0.15);
+    flameTonguePath(ctx, f.x, baseY + 1 * s, 2.4 * s, (7.5 + k2 * 1.5) * s, k * 1.2 * s);
     ctx.fill();
   });
+  ctx.restore();
+}
+
+// ── 오크 주둔지(챕터 3) 배경 연출 ── 좌표는 맵 그림(1602×981) 기준 → 그릴 때 전장 좌표로 바꿈
+//  - 횃불·모닥불 11곳이 전부 일렁임 (주황 불꽃)
+//  - 문 위 소뿔 해골의 두 눈이 붉게 빛났다가 사라지기를 반복
+const mapToField = (x, y) => ({ x: x * GAME_DATA.field.width / 1602, y: y * GAME_DATA.field.height / 981 });
+const ORC_FLAMES = [
+  // [맵 x, 맵 y(불꽃 밝은 부분 가운데), 크기]
+  [169, 24, 0.55], [1457, 30, 0.55],     // 위쪽 모서리 망루
+  [583, 99, 0.9], [1025, 100, 0.9],      // 정문 양옆 화로
+  [359, 154, 0.8],                       // 모닥불
+  [82, 234, 0.7], [1522, 232, 0.7],      // 위쪽 좌우 화로
+  [78, 586, 0.85], [1530, 601, 0.85],    // 아래쪽 좌우 화로
+  [514, 824, 1.2], [1085, 821, 1.2],     // 아래 출입구 양옆 큰 화로
+].map(([x, y, s]) => ({ ...mapToField(x, y), s }));
+const ORC_SKULL_EYES = [[785.5, 51], [822.5, 52]].map(([x, y]) => mapToField(x, y));
+const SKULL_EYE_PULSE = { period: 3.6, rise: 0.7, hold: 0.5, fall: 1.0 };   // 나머지 시간은 꺼져 있음
+
+function drawSkullEyes(ctx, time) { drawRedEyes(ctx, ORC_SKULL_EYES, pulseLevel(time, SKULL_EYE_PULSE)); }
+
+// ── 악마성(챕터 4) 배경 연출 ── 좌표는 맵 그림(1602×981) 기준 → 그릴 때 전장 좌표로 바꿈
+//  - 촛대 10개의 촛불 30개가 전부 일렁임
+//  - 가고일 석상 두 마리의 눈이 붉게 빛났다가 사라지기를 반복
+//  - 북쪽 성 창문이 방 안 불을 껐다 켜듯 꺼졌다 켜짐 (켤 때 살짝 깜빡). 가운데 큰 창 따로, 양쪽 쌍창은 같이
+const FLAME_CANDLE = { glow: [255, 150, 80], glow2: [255, 90, 50], outer: [255, 170, 80], inner: [255, 240, 200] };
+const DEMON_CANDLES = [
+  // 촛대마다 [가운데, 왼쪽, 오른쪽] 불꽃 (맵 px)
+  [[296.7, 85.8], [283.3, 96.7], [309.7, 96.7]],      // 위 왼쪽
+  [[553.7, 85.8], [540.3, 96.7], [567.5, 96.7]],      // 위 가운데 왼쪽
+  [[1053.3, 85.8], [1040.3, 97.2], [1066.7, 97.2]],   // 위 가운데 오른쪽
+  [[1319.5, 85.8], [1306.7, 97.5], [1332.8, 97.5]],   // 위 오른쪽
+  [[97.5, 255.8], [84.5, 266.7], [110.8, 267.2]],     // 왼쪽 위
+  [[1520.8, 305], [1507.5, 317.5], [1534.2, 317.5]],  // 오른쪽 위
+  [[97.5, 715], [84.5, 730], [110, 730]],             // 왼쪽 아래
+  [[1507.5, 715.8], [1494.2, 728.3], [1520, 729.2]],  // 오른쪽 아래
+  [[556.7, 836.7], [544.2, 850.8], [569.2, 850.8]],   // 아래 왼쪽
+  [[1050.8, 835], [1037.8, 850.8], [1063.7, 850.8]],  // 아래 오른쪽
+].flat().map(([x, y], i) => ({ ...mapToField(x, y - 1), s: i % 3 === 0 ? 0.34 : 0.3 }));
+const DEMON_GARGOYLE_EYES = [[439, 54], [455, 54], [1152, 53], [1168, 53]].map(([x, y]) => mapToField(x, y));
+const GARGOYLE_EYE_PULSE = { period: 4.4, rise: 0.9, hold: 0.6, fall: 1.2 };   // 해골 눈보다 느리게
+
+// 빛났다 사라지는 맥동 세기 0~1 (rise → hold → fall → 나머지는 꺼짐)
+function pulseLevel(time, P, offset = 0) {
+  const t = ((time + offset) % P.period + P.period) % P.period;
+  let a = 0;
+  if (t < P.rise) a = t / P.rise;
+  else if (t < P.rise + P.hold) a = 1;
+  else if (t < P.rise + P.hold + P.fall) a = 1 - (t - P.rise - P.hold) / P.fall;
+  return a * a * (3 - 2 * a);
+}
+
+// 붉은 눈빛 (해골·가고일 공용): 빛 번짐 + 밝은 심
+function drawRedEyes(ctx, eyes, a, r = 9) {
+  if (a < 0.01) return;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const e of eyes) {
+    const glow = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, r);
+    glow.addColorStop(0, `rgba(255,60,40,${(0.75 * a).toFixed(3)})`);
+    glow.addColorStop(0.4, `rgba(255,30,20,${(0.3 * a).toFixed(3)})`);
+    glow.addColorStop(1, 'rgba(255,30,20,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(e.x - r, e.y - r, r * 2, r * 2);
+    ctx.fillStyle = `rgba(255,190,150,${(0.9 * a).toFixed(3)})`;   // 눈동자 심
+    ctx.beginPath();
+    ctx.ellipse(e.x, e.y, 1.6, 1.1, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// 창문 빛: assets/maps/ch4_windows.png = 맵에서 창문 유리만 남긴 그림 (맵 x 590부터, 높이 130)
+const DEMON_WINDOWS = {
+  src: 'assets/maps/ch4_windows.png', mapX: 590, mapW: 430, mapH: 130,
+  rooms: [   // 창마다 유리 범위(맵 px)와 빛 번짐 가운데. light: 같은 번호끼리 같이 켜지고 꺼짐
+    { x0: 590, x1: 685, cx: 637, cy: 66, light: 1 },   // 왼쪽 쌍창 ┐ 같이
+    { x0: 755, x1: 850, cx: 802, cy: 70, light: 0 },   // 가운데 큰 창 (따로)
+    { x0: 925, x1: 1020, cx: 975, cy: 66, light: 1 },  // 오른쪽 쌍창 ┘
+  ],
+  img: null, dark: null,
+};
+// 방 불 켜짐 정도 0~1: 켜짐 3~7초 / 꺼짐 1.5~3.5초를 방마다 따로 (같은 시각이면 항상 같은 결과)
+const roomLightCache = [];
+function roomRand(i, n, k) {   // 0~1 고정 난수
+  const v = Math.sin(i * 127.1 + n * 311.7 + k * 74.7) * 43758.5453;
+  return v - Math.floor(v);
+}
+function roomLight(i, time) {
+  let c = roomLightCache[i];
+  if (!c || time < c.start) c = roomLightCache[i] = { n: 0, start: -roomRand(i, 0, 9) * 4 };
+  for (;;) {
+    const on = 3 + roomRand(i, c.n, 1) * 4, off = 1.5 + roomRand(i, c.n, 2) * 2;
+    if (time < c.start + on + off) {
+      const t = time - c.start;
+      if (t < on) {
+        // 켜는 순간: 0.35초 동안 두어 번 깜빡이다 켜짐
+        if (t < 0.35) return (t < 0.06 || (t > 0.14 && t < 0.2) || t > 0.27) ? 1 : 0.25;
+        return 1;
+      }
+      const to = t - on;
+      return to < 0.12 ? 1 - to / 0.12 : 0;   // 끌 때는 빠르게
+    }
+    c.start += on + off; c.n++;
+  }
+}
+
+function drawDemonWindows(ctx, time) {
+  const W = DEMON_WINDOWS;
+  if (!W.img) return;
+  const F = GAME_DATA.field, kx = F.width / 1602, ky = F.height / 981;
+  if (!W.dark) {   // 유리 모양 그대로 어두운 색으로 칠한 그림 (꺼진 방)
+    const c = document.createElement('canvas'); c.width = W.mapW; c.height = W.mapH;
+    const cx = c.getContext('2d');
+    cx.drawImage(W.img, 0, 0);
+    cx.globalCompositeOperation = 'source-in';
+    cx.fillStyle = 'rgb(28,12,26)';
+    cx.fillRect(0, 0, W.mapW, W.mapH);
+    W.dark = c;
+  }
+  W.rooms.forEach((r) => {
+    const lv = roomLight(r.light, time);
+    const sx = r.x0 - W.mapX, sw = r.x1 - r.x0;
+    const dx = r.x0 * kx, dw = sw * kx, dh = W.mapH * ky;
+    ctx.save();
+    if (lv < 1) {   // 꺼짐: 유리를 어둡게 덮음
+      ctx.globalAlpha = (1 - lv) * 0.88;
+      ctx.drawImage(W.dark, sx, 0, sw, W.mapH, dx, 0, dw, dh);
+    }
+    if (lv > 0) {   // 켜짐: 유리를 조금 더 밝게 + 창 앞으로 붉은 빛 번짐
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = lv * 0.35;
+      ctx.drawImage(W.img, sx, 0, sw, W.mapH, dx, 0, dw, dh);
+      ctx.globalAlpha = 1;
+      const p = mapToField(r.cx, r.cy), rad = 34;
+      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, rad);
+      g.addColorStop(0, `rgba(255,50,60,${(0.22 * lv).toFixed(3)})`);
+      g.addColorStop(1, 'rgba(255,50,60,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(p.x - rad, p.y - rad, rad * 2, rad * 2);
+    }
+    ctx.restore();
+  });
+}
+
+// ── 개미굴(챕터 5) 배경 연출 ── 좌표는 맵 그림(1602×981) 기준
+//  - 굴 3곳 안쪽의 분홍빛이 밝아졌다가 사라지기를 반복 (굴마다 때가 조금씩 다름)
+//  - 바닥 보라 균열 5곳은 1챕터 균열처럼 늘 은은하게 맥동하며 빛나고, 그쪽에서 적이 나오면 번쩍 (동·서)
+//  - 알 무더기에 약한 분홍빛이 은은하게 숨 쉬듯 빛남
+//  - assets/maps/ch5_glow.png = 맵에서 굴 안쪽 빛과 균열만 남긴 그림. 꺼질 때는 이 모양대로 어둡게 덮고,
+//    켜질 때는 빛을 더하고 번짐(흐리게 한 그림)을 얹음
+const ANT_GLOW = { src: 'assets/maps/ch5_glow.png', img: null, dark: null, bloom: null, soft: null };
+const ANT_TUNNEL_PULSE = { period: 5.2, rise: 1.3, hold: 0.9, fall: 1.6 };
+const ANT_GLOW_REGIONS = [
+  // 굴: 빛 번짐 가운데(cx,cy)·반경(rad, 맵 px)
+  { x0: 690, y0: 40, x1: 940, y1: 195, cx: 822, cy: 138, rad: 120, pulse: ANT_TUNNEL_PULSE, offset: 0,   dark: 0.7, bright: 0.75, glow: [255, 80, 220] },
+  { x0: 205, y0: 80, x1: 345, y1: 195, cx: 300, cy: 150, rad: 70,  pulse: ANT_TUNNEL_PULSE, offset: 1.8, dark: 0.7, bright: 0.75, glow: [255, 80, 220] },
+  // 오른쪽 굴: 안쪽 빛이 거의 알이라 빛을 약하게 (알이 너무 진하게 번쩍이지 않도록)
+  { x0: 1350, y0: 95, x1: 1480, y1: 192, cx: 1418, cy: 156, rad: 60, pulse: ANT_TUNNEL_PULSE, offset: 3.4, dark: 0.45, bright: 0.28, bloom: 0.35, halo: 0.5, glow: [255, 80, 220] },
+];
+// 바닥 균열 (맵 px 영역): 1챕터 균열처럼 늘 은은하게 맥동하며 빛나고, 그쪽(side = 출현 지점 번호)에서 적이 나오면 번쩍
+const ANT_CRACKS = [
+  { x0: 140, y0: 300, x1: 390, y1: 440, side: 3 },    // 서쪽 위
+  { x0: 200, y0: 610, x1: 390, y1: 700, side: 3 },    // 서쪽 아래
+  { x0: 1380, y0: 325, x1: 1510, y1: 395, side: 1 },  // 동쪽 위
+  { x0: 1260, y0: 485, x1: 1470, y1: 560, side: 1 },  // 동쪽 가운데
+  { x0: 1120, y0: 715, x1: 1350, y1: 810, side: 1 },  // 동쪽 아래
+];
+// 알 무더기: 가운데·반경(맵 px)
+const ANT_EGGS = [
+  [130, 145, 42], [262, 175, 16], [434, 80, 24], [539, 160, 32], [1091, 149, 26], [1246, 97, 32],
+  [1570, 230, 34], [40, 425, 36], [100, 870, 62], [1320, 925, 32], [1264, 944, 18], [1445, 900, 26],
+];
+
+function buildAntGlow() {
+  const G = ANT_GLOW, w = G.img.width, h = G.img.height;
+  const dark = document.createElement('canvas'); dark.width = w; dark.height = h;
+  const dc = dark.getContext('2d');
+  dc.drawImage(G.img, 0, 0);
+  dc.globalCompositeOperation = 'source-in';
+  dc.fillStyle = 'rgb(36,24,50)';   // 바닥 돌 그늘색
+  dc.fillRect(0, 0, w, h);
+  G.dark = dark;
+  const bloom = document.createElement('canvas'); bloom.width = w; bloom.height = h;
+  const bc = bloom.getContext('2d');
+  // 균열 번짐: 1챕터와 같은 방식 (작게 줄였다가 늘려 그려 흐릿하게 퍼짐)
+  const soft = document.createElement('canvas');
+  soft.width = Math.ceil(w / CRACK_BLUR_SCALE); soft.height = Math.ceil(h / CRACK_BLUR_SCALE);
+  const sc = soft.getContext('2d');
+  sc.imageSmoothingEnabled = true;
+  sc.drawImage(G.img, 0, 0, soft.width, soft.height);
+  G.soft = soft;
+  if ('filter' in bc) {             // 흐리게 번진 빛 (지원하지 않는 브라우저는 번짐 없이)
+    bc.filter = 'blur(5px)';
+    bc.drawImage(G.img, 0, 0);
+    bc.drawImage(G.img, 0, 0);
+    G.bloom = bloom;
+  }
+}
+
+function drawAntNest(ctx, view) {
+  const time = view.time;
+  const G = ANT_GLOW;
+  const F = GAME_DATA.field, kx = F.width / 1602, ky = F.height / 981;
+  if (G.img) {
+    if (!G.dark) buildAntGlow();
+    for (const r of ANT_GLOW_REGIONS) {
+      const lv = pulseLevel(time, r.pulse, r.offset);
+      const sw = r.x1 - r.x0, sh = r.y1 - r.y0;
+      const dx = r.x0 * kx, dy = r.y0 * ky, dw = sw * kx, dh = sh * ky;
+      ctx.save();
+      if (lv < 1) {                 // 사라짐: 빛 모양대로 어둡게 덮음
+        ctx.globalAlpha = (1 - lv) * r.dark;
+        ctx.drawImage(G.dark, r.x0, r.y0, sw, sh, dx, dy, dw, dh);
+      }
+      if (lv > 0.01) {              // 빛남: 빛 더하기 + 번짐 + 둘레 은은한 빛
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = lv * r.bright;
+        ctx.drawImage(G.img, r.x0, r.y0, sw, sh, dx, dy, dw, dh);
+        if (G.bloom) {
+          ctx.globalAlpha = lv * r.bright * (r.bloom ?? 1);
+          ctx.drawImage(G.bloom, r.x0, r.y0, sw, sh, dx, dy, dw, dh);
+        }
+        ctx.globalAlpha = 1;
+        const p = mapToField(r.cx, r.cy), rad = r.rad * kx;
+        const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, rad);
+        g.addColorStop(0, rgba(r.glow, 0.14 * lv * (r.halo ?? 1)));
+        g.addColorStop(1, rgba(r.glow, 0));
+        ctx.fillStyle = g;
+        ctx.fillRect(p.x - rad, p.y - rad, rad * 2, rad * 2);
+      }
+      ctx.restore();
+    }
+  }
+  // 바닥 균열: 1챕터 drawCrackGlow와 같은 세기·박자 (번지는 빛 두 겹 + 균열 선)
+  if (G.img && G.soft) {
+    const q = CRACK_BLUR_SCALE;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.imageSmoothingEnabled = true;
+    ANT_CRACKS.forEach((r, i) => {
+      const base = 0.35 + 0.2 * Math.sin(time * 1.8 + i * 1.57);
+      const a = Math.min(1, base + (view.crackFlash[r.side] || 0) * 0.9);
+      const sw = r.x1 - r.x0, sh = r.y1 - r.y0;
+      const dx = r.x0 * kx, dy = r.y0 * ky, dw = sw * kx, dh = sh * ky;
+      ctx.globalAlpha = a;
+      ctx.drawImage(G.soft, r.x0 / q, r.y0 / q, sw / q, sh / q, dx, dy, dw, dh);
+      ctx.drawImage(G.soft, r.x0 / q, r.y0 / q, sw / q, sh / q, dx, dy, dw, dh);
+      ctx.globalAlpha = a * 0.8;
+      ctx.drawImage(G.img, r.x0, r.y0, sw, sh, dx, dy, dw, dh);
+    });
+    ctx.restore();
+  }
+  // 알: 약한 분홍빛이 3초 안팎으로 숨 쉬듯
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ANT_EGGS.forEach(([x, y, rr], i) => {
+    const p = mapToField(x, y), rad = rr * kx * 1.5;
+    const a = 0.1 + 0.08 * (0.5 + 0.5 * Math.sin(time * 2.1 + i * 2.3));
+    const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, rad);
+    g.addColorStop(0, `rgba(255,150,230,${a.toFixed(3)})`);
+    g.addColorStop(0.6, `rgba(230,110,220,${(a * 0.4).toFixed(3)})`);
+    g.addColorStop(1, 'rgba(230,110,220,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(p.x - rad, p.y - rad, rad * 2, rad * 2);
+  });
+  ctx.restore();
+}
+
+// ── 카르테논 신전 최종(챕터 6) 배경 연출 ── 1챕터 신전과 같은 구성(불꽃 6곳·석상 눈빛·출현 균열 빛)을 붉은빛으로
+//  - 석상 눈은 붉게만 빛나고(1챕터는 푸른빛·붉은빛 번갈아), 눈동자가 한곳을 보다가 휙 다른 곳으로 시선을 옮김
+const FLAME_RED = { glow: [255, 70, 50], glow2: [230, 30, 30], outer: [255, 60, 40], inner: [255, 200, 170] };
+const DARK_FLAMES = [
+  [506.5, 42.5], [1096, 43],      // 위쪽 벽감
+  [94, 119], [1508, 119],         // 위쪽 모서리 기둥
+  [108.5, 879], [1494.5, 878],    // 아래쪽 모서리 기둥
+].map(([x, y]) => mapToField(x, y));
+// 붉은 균열 (맵 px 영역 → 전장 좌표). side = 출현 지점 번호(0 북·1 동·2 남·3 서) → 그쪽에서 적이 나오면 번쩍
+const DARK_CRACKS = [
+  [680, 115, 905, 265, 0], [1380, 420, 1570, 545, 1], [695, 690, 885, 895, 2], [30, 415, 225, 540, 3],
+  [190, 170, 300, 285, 3], [1300, 170, 1410, 260, 1], [170, 690, 295, 790, 3], [1295, 715, 1410, 815, 1],
+].map(([x0, y0, x1, y1, side]) => {
+  const a = mapToField(x0, y0), b = mapToField(x1, y1);
+  return { x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y, side };
+});
+const DARK_EYES = [[767, 23], [846, 23]].map(([x, y]) => mapToField(x, y));
+
+// 눈동자 시선: 한곳을 잠시 보다가 빠르게 다른 곳으로 휙 옮김 (x·y는 -1~1, hold = 머무는 시간 초)
+const DARK_EYE_GAZE = [
+  { x: 0, y: 0, hold: 1.6 }, { x: -1, y: 0.2, hold: 1.2 }, { x: -0.4, y: 0.5, hold: 0.7 },
+  { x: 1, y: 0.1, hold: 1.4 }, { x: 0.3, y: -0.5, hold: 0.9 }, { x: 1, y: 0.4, hold: 0.8 }, { x: -0.8, y: -0.2, hold: 1.1 },
+];
+const DARK_EYE_MOVE = 0.16;            // 시선을 옮기는 데 걸리는 시간(초)
+const DARK_EYE_RANGE = { x: 3.2, y: 1.2 };   // 최대 움직임(전장 px)
+const DARK_EYE_CYCLE = DARK_EYE_GAZE.reduce((t, g) => t + g.hold + DARK_EYE_MOVE, 0);
+function darkEyeGaze(time) {
+  let t = time % DARK_EYE_CYCLE;
+  for (let i = 0; i < DARK_EYE_GAZE.length; i++) {
+    const g = DARK_EYE_GAZE[i], nx = DARK_EYE_GAZE[(i + 1) % DARK_EYE_GAZE.length];
+    if (t < g.hold) return { x: g.x, y: g.y };
+    t -= g.hold;
+    if (t < DARK_EYE_MOVE) {
+      const u = easeInOut(t / DARK_EYE_MOVE);
+      return { x: g.x + (nx.x - g.x) * u, y: g.y + (nx.y - g.y) * u };
+    }
+    t -= DARK_EYE_MOVE;
+  }
+  return { x: 0, y: 0 };
+}
+
+function drawDarkStatueEyes(ctx, time) {
+  const gz = darkEyeGaze(time);
+  const dx = gz.x * DARK_EYE_RANGE.x, dy = gz.y * DARK_EYE_RANGE.y;
+  const a = eyePulse(time);   // 1챕터와 같은 박자로 맥동 (붉은빛만)
+  ctx.save();
+  for (const e of DARK_EYES) {
+    // 1) 맵에 그려진 눈동자와 그 둘레 붉은 빛을 눈구멍 색으로 덮음 (움직이는 눈동자로 대신 그림)
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.save();
+    ctx.translate(e.x, e.y);
+    ctx.scale(1.6, 1);
+    const cover = ctx.createRadialGradient(0, 0, 0, 0, 0, 4.6);
+    cover.addColorStop(0, 'rgba(34,3,8,1)');
+    cover.addColorStop(0.7, 'rgba(34,3,8,0.9)');
+    cover.addColorStop(1, 'rgba(34,3,8,0)');
+    ctx.fillStyle = cover;
+    ctx.fillRect(-5, -5, 10, 10);
+    ctx.restore();
+    // 2) 움직이는 눈동자: 늘 붉게 빛나고, 맥동 때 더 밝고 넓게
+    const x = e.x + dx, y = e.y + dy;
+    ctx.globalCompositeOperation = 'lighter';
+    const r = 5 + a * 5;
+    const glow = ctx.createRadialGradient(x, y, 0, x, y, r);
+    glow.addColorStop(0, `rgba(255,60,50,${(0.55 + a * 0.35).toFixed(3)})`);
+    glow.addColorStop(0.45, `rgba(220,25,25,${(0.22 + a * 0.18).toFixed(3)})`);
+    glow.addColorStop(1, 'rgba(220,25,25,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = 'rgb(225,30,35)';          // 붉은 테
+    ctx.beginPath(); ctx.arc(x, y, 1.9, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = `rgba(255,170,160,${(0.85 + a * 0.15).toFixed(3)})`;   // 밝은 심
+    ctx.beginPath(); ctx.arc(x, y, 0.9, 0, Math.PI * 2); ctx.fill();
+  }
   ctx.restore();
 }
 
@@ -1810,6 +2161,142 @@ const PROC_FX = {
   },
 };
 
+// ── 설원 숲(챕터 2) 배경 연출 ── 좌표는 맵 그림(1602×981) 기준, 그릴 때 전장 크기로 줄임. 실제 시간 기준이라 준비·일시정지 중에도 움직임
+//  - 바람 세기(snowWind)를 눈과 나무가 같이 써서, 돌풍이 불 때 눈이 몰아치고 나무도 조금 더 흔들림
+const SNOW_MAP = { w: 1602, h: 981 };
+// 수정 보석: 가운데·크기(맵 px). 은은하게 빛이 맥동하고, 간간히 면 위에 별빛이 반짝임
+const SNOW_CRYSTALS = [
+  { x: 522, y: 87, w: 92, h: 72 }, { x: 1095, y: 115, w: 70, h: 62 }, { x: 1441, y: 206, w: 64, h: 62 },
+  { x: 1429, y: 164, w: 30, h: 30 }, { x: 43, y: 494, w: 56, h: 58 }, { x: 1544, y: 500, w: 73, h: 64 },
+  { x: 232, y: 879, w: 67, h: 71 }, { x: 1424, y: 849, w: 68, h: 67 },
+];
+// 흔들리는 나무: 잘라낼 영역(x0,y0,x1,y1)과 밑동 높이(base, 여기서는 안 움직임). 위로 갈수록 더 휘어짐
+const SNOW_TREES = [
+  { x0: 285, y0: 0,   x1: 410,  y1: 150, base: 150, phase: 0.0 },
+  { x0: 1185, y0: 0,  x1: 1305, y1: 140, base: 140, phase: 2.1 },
+  { x0: 1475, y0: 0,  x1: 1602, y1: 270, base: 270, phase: 4.0 },
+  { x0: 55, y0: 810,  x1: 200,  y1: 981, base: 981, phase: 1.3 },
+  { x0: 1125, y0: 860, x1: 1220, y1: 981, base: 981, phase: 3.2 },
+  { x0: 1490, y0: 715, x1: 1602, y1: 981, base: 981, phase: 5.1 },
+];
+const TREE_SWAY_PX = 2.6;     // 나무 꼭대기가 움직이는 최대 폭(맵 px)
+const TREE_SWAY_STEPS = 15;   // 미리 그려 두는 흔들림 단계 수 (-1 ~ 1)
+const SNOW_FLAKES = 70;       // 눈송이 최대 수 (돌풍 때 전부, 평소엔 일부만)
+
+// 바람 세기 0~1: 평소 약하게, 10초 안팎마다 3~4초 돌풍
+function snowWind(t) {
+  const gust = Math.max(0, Math.sin(t * 0.55) * 0.6 + Math.sin(t * 0.23 + 1.3) * 0.5 - 0.35);
+  return Math.min(1, 0.15 + gust * 1.4);
+}
+
+// 나무 한 그루를 흔들림 단계별로 미리 그려 둠: 가로 줄마다 높이에 따라 옆으로 밀고, 가장자리는 부드럽게 비침
+function buildSwayFrames(img, t) {
+  const w = t.x1 - t.x0, h = t.y1 - t.y0, frames = [];
+  const mask = document.createElement('canvas'); mask.width = w; mask.height = h;
+  const mc = mask.getContext('2d');
+  mc.save(); mc.translate(w / 2, h * 0.55); mc.scale(w / 2, h * 0.55);
+  const g = mc.createRadialGradient(0, 0, 0, 0, 0, 1);
+  g.addColorStop(0, 'rgba(0,0,0,1)'); g.addColorStop(0.6, 'rgba(0,0,0,1)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+  mc.fillStyle = g; mc.fillRect(-1, -1, 2, 2); mc.restore();
+  for (let s = 0; s < TREE_SWAY_STEPS; s++) {
+    const a = (s / (TREE_SWAY_STEPS - 1)) * 2 - 1;
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const cx = c.getContext('2d');
+    cx.imageSmoothingEnabled = true;
+    const STRIP = 2;
+    for (let y = 0; y < h; y += STRIP) {
+      const rise = Math.max(0, (t.base - (t.y0 + y)) / (t.base - t.y0));   // 밑동 0 → 꼭대기 1
+      const dx = a * TREE_SWAY_PX * Math.pow(rise, 1.6);
+      cx.drawImage(img, t.x0, t.y0 + y, w, STRIP, dx, y, w, STRIP);
+    }
+    cx.globalCompositeOperation = 'destination-in';
+    cx.drawImage(mask, 0, 0);
+    frames.push(c);
+  }
+  return frames;
+}
+
+function drawSnowTrees(ctx, entry, time) {
+  if (!entry || !entry.img) return;
+  if (!entry.swayFrames) entry.swayFrames = SNOW_TREES.map((t) => buildSwayFrames(entry.img, t));
+  const F = GAME_DATA.field, kx = F.width / SNOW_MAP.w, ky = F.height / SNOW_MAP.h;
+  const wind = snowWind(time);
+  SNOW_TREES.forEach((t, i) => {
+    // 바람 방향(오른쪽)으로 살짝 기운 채 흔들림. 돌풍이면 더 크게
+    const sway = Math.sin(time * 1.7 + t.phase) * (0.35 + wind * 0.45) + wind * 0.25;
+    const a = Math.max(-1, Math.min(1, sway));
+    const fr = entry.swayFrames[i][Math.round((a + 1) / 2 * (TREE_SWAY_STEPS - 1))];
+    ctx.drawImage(fr, t.x0 * kx, t.y0 * ky, (t.x1 - t.x0) * kx, (t.y1 - t.y0) * ky);
+  });
+}
+
+// 수정 반짝임: 빛 번짐 맥동 + 수정마다 다른 때에 4갈래 별빛이 짧게 반짝
+function drawSnowCrystals(ctx, time) {
+  const F = GAME_DATA.field, kx = F.width / SNOW_MAP.w, ky = F.height / SNOW_MAP.h;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  SNOW_CRYSTALS.forEach((c, i) => {
+    const x = c.x * kx, y = c.y * ky, r = Math.max(c.w, c.h) * kx * 0.75;
+    const pulse = 0.5 + 0.5 * Math.sin(time * 1.6 + i * 1.9);
+    const glow = ctx.createRadialGradient(x, y, 0, x, y, r);
+    glow.addColorStop(0, `rgba(110,200,255,${(0.16 + pulse * 0.14).toFixed(3)})`);
+    glow.addColorStop(1, 'rgba(110,200,255,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+    // 별빛: 수정마다 주기 2.6~4.2초 중 0.5초 동안. 면 위 세 자리를 돌아가며
+    const period = 2.6 + (i * 0.37) % 1.6;
+    const cyc = (time + i * 0.83) / period;
+    const p = (cyc % 1) / (0.5 / period);
+    if (p < 1) {
+      const spots = [[0, -0.22], [-0.2, 0.02], [0.18, -0.05]];
+      const [ox, oy] = spots[Math.floor(cyc) % spots.length];
+      const sx = x + ox * c.w * kx, sy = y + oy * c.h * ky;
+      const k = Math.sin(p * Math.PI);            // 0 → 1 → 0
+      const len = (3 + c.w * kx * 0.12) * k;
+      ctx.fillStyle = `rgba(225,245,255,${(0.9 * k).toFixed(3)})`;
+      ctx.beginPath();                             // 가늘고 긴 4갈래 별
+      ctx.moveTo(sx, sy - len); ctx.lineTo(sx + 0.8, sy - 0.8); ctx.lineTo(sx + len, sy); ctx.lineTo(sx + 0.8, sy + 0.8);
+      ctx.lineTo(sx, sy + len); ctx.lineTo(sx - 0.8, sy + 0.8); ctx.lineTo(sx - len, sy); ctx.lineTo(sx - 0.8, sy - 0.8);
+      ctx.closePath(); ctx.fill();
+      const core = ctx.createRadialGradient(sx, sy, 0, sx, sy, 3.5);
+      core.addColorStop(0, `rgba(255,255,255,${(0.8 * k).toFixed(3)})`);
+      core.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = core;
+      ctx.fillRect(sx - 4, sy - 4, 8, 8);
+    }
+  });
+  ctx.restore();
+}
+
+// 휘날리는 눈: 평소엔 드문드문, 돌풍 때 많아지고 바람 쪽(오른쪽)으로 비스듬히 날림. 유닛 위에 그림
+const snowFx = { flakes: null, last: null };
+function drawSnowfall(ctx, time) {
+  const F = GAME_DATA.field;
+  if (!snowFx.flakes) {
+    snowFx.flakes = Array.from({ length: SNOW_FLAKES }, (_, i) => ({
+      x: Math.random() * F.width, y: Math.random() * F.height,
+      vy: 16 + Math.random() * 22, size: Math.random() < 0.3 ? 2 : 1.4,
+      seed: Math.random() * 10, alpha: 0.45 + Math.random() * 0.4, order: i / SNOW_FLAKES,
+    }));
+  }
+  const dt = snowFx.last === null ? 0 : Math.min(0.1, Math.max(0, time - snowFx.last));
+  snowFx.last = time;
+  const wind = snowWind(time);
+  const amount = 0.18 + wind * 0.82;            // 보이는 눈송이 비율
+  ctx.save();
+  for (const f of snowFx.flakes) {
+    f.x += (14 + wind * 70 + Math.sin(time * 1.3 + f.seed) * 8) * dt;
+    f.y += f.vy * (0.8 + wind * 0.5) * dt;
+    if (f.y > F.height + 4) { f.y = -4; f.x = Math.random() * F.width; }
+    if (f.x > F.width + 4) { f.x = -4; f.y = Math.random() * F.height; }
+    const fade = Math.max(0, Math.min(1, (amount - f.order) * 8));   // 늘고 줄 때 부드럽게
+    if (fade <= 0) continue;
+    ctx.fillStyle = `rgba(235,245,255,${(f.alpha * fade).toFixed(3)})`;
+    ctx.fillRect(f.x, f.y, f.size, f.size);
+  }
+  ctx.restore();
+}
+
 // 챕터 배경 맵: 경로별로 한 번만 불러와 보관. status: loading → ok / fail
 const mapCache = {};
 function loadMap(src) {
@@ -1834,20 +2321,32 @@ function currentMapTheme(chapterId) {
   const base = mapCache[MAP_IMAGE_SRC];
   const own = th.map ? mapCache[th.map] : null;
   if (own && own.status === 'ok' && th.map !== MAP_IMAGE_SRC) {
-    return { img: own.img, tint: th.tint || null, decor: th.decor === 'temple', crackGlow: base && base.crackGlow };
+    return { img: own.img, entry: own, tint: th.tint || null, decor: th.decor === 'temple', snow: th.decor === 'snow', orc: th.decor === 'orc', demon: th.decor === 'demon', ant: th.decor === 'ant', darkTemple: th.decor === 'darktemple', crackGlow: base && base.crackGlow };
   }
   return { img: base && base.img, tint: th.tint || null, decor: true, crackGlow: base && base.crackGlow };
 }
 
-// 중앙 거점 오브젝트 (assets/sprites/core.png, 104×101 도트). 파일이 없으면 기존 원형으로 그림
+// 중앙 거점 오브젝트 (assets/sprites/core.png, 104×101 도트). 그림이 없는 챕터는 챕터 1 거점, 그것도 없으면 기존 원형으로 그림
 //  - 옆면 두께까지 포함한 전체 모양의 가운데를 거점 좌표(= 맵 중앙 문양)에 맞춤. 판정(반경 45)은 그대로
 //  - 돌 색은 맵 석상 얼굴 돌 색에 맞춘 그림 (푸른 빛은 원본 그대로)
+//  - 챕터 2~6: 같은 단상을 맵 색에 맞춰 다시 칠한 그림 (돌 = 맵 바닥색, 빛 = 맵 강조색)
+//    2 설원 숲: 밝은 푸른 돌·푸른 빛 / 3 오크 주둔지: 흙색 돌·주황 빛 / 4 악마성: 보랏빛 돌·붉은 빛
+//    5 개미굴: 짙은 보라 돌·자홍 빛 / 6 카르테논 신전(최종): 어두운 돌·붉은 빛
 //  - 남은 HP는 별 문양 위 숫자로만 표시 (상단 HUD에도 표시됨)
-const CORE_SPRITE = {
-  src: 'assets/sprites/core.png', w: 104, h: 101,
-  anchorX: 52, anchorY: 50,            // 전체 모양 가운데 (칸 안 좌표)
-  starY: 44,                           // 윗면 별 문양 가운데 높이 → HP 숫자 위치
+const CORE_SHAPE = { w: 104, h: 101, anchorX: 52, anchorY: 50, starY: 44 };   // anchor: 전체 모양 가운데, starY: 별 문양 높이 → HP 숫자 위치
+const CORE_SPRITES = {
+  1: { src: 'assets/sprites/core.png',     ...CORE_SHAPE },
+  2: { src: 'assets/sprites/core_ch2.png', ...CORE_SHAPE },
+  3: { src: 'assets/sprites/core_ch3.png', ...CORE_SHAPE },
+  4: { src: 'assets/sprites/core_ch4.png', ...CORE_SHAPE },
+  5: { src: 'assets/sprites/core_ch5.png', ...CORE_SHAPE },
+  6: { src: 'assets/sprites/core_ch6.png', ...CORE_SHAPE },
 };
+function coreSpriteFor(chapterId) {
+  const own = CORE_SPRITES[chapterId];
+  if (own && own.img) return own;
+  return CORE_SPRITES[1].img ? CORE_SPRITES[1] : null;
+}
 
 // 거점 피격 흔들림: 맞은 순간 좌우로 크게(3px) 흔들리다 잦아들고, 처음에만 아래로 1px 덜컹. 1px 단위라 도트가 번지지 않음
 const CORE_SHAKE_TIME = 0.3;   // 지속(초)
@@ -1864,8 +2363,7 @@ function coreShake(state) {
   };
 }
 
-function drawCoreSprite(ctx, core, state, hpRatio) {
-  const C = CORE_SPRITE;
+function drawCoreSprite(ctx, core, state, C) {
   const k = ctx.getTransform().a;
   const sh = coreShake(state);
   const x = Math.round((core.x - C.anchorX + sh.dx) * k) / k;
@@ -1888,7 +2386,7 @@ function drawCoreSprite(ctx, core, state, hpRatio) {
 const CORE_HP_LOW = 50;   // 거점 HP가 이 값 이하면 숫자를 붉게
 
 function loadFxSheets() {
-  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, SLAM_FX, BITE_FX, REMNANT_FX, CORE_SPRITE]) {
+  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, SLAM_FX, BITE_FX, REMNANT_FX, DEMON_WINDOWS, ANT_GLOW, ...Object.values(CORE_SPRITES)]) {
     const img = new Image();
     img.onload = () => { fx.img = fx.shade ? buildTintedSheet(img, fx.shade) : img; };
     img.onerror = () => console.warn(`[이펙트 불러오기 실패] ${fx.src}`);
@@ -1992,6 +2490,7 @@ function render(ctx, state, view) {
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(theme.img, 0, 0, F.width, F.height);
+    if (theme.snow) drawSnowTrees(ctx, theme.entry, view.time);   // 설원 숲: 나무 흔들림 (어둡게 덮기 전에 맵과 함께)
     ctx.fillStyle = COLORS.mapShade;   // 유닛이 잘 보이도록 살짝 어둡게
     ctx.fillRect(0, 0, F.width, F.height);
     if (theme.tint) {                  // 챕터 분위기 색 (전용 맵이 없을 때 기본 맵 위에 덮음)
@@ -2003,6 +2502,23 @@ function render(ctx, state, view) {
       drawStatueEyes(ctx, view.time);  // 석상 눈빛 맥동
       drawCrackGlow(ctx, view, theme.crackGlow);   // 출현 균열 빛 (적이 나올 때 번쩍)
     }
+    if (theme.snow) drawSnowCrystals(ctx, view.time);   // 설원 숲: 수정 반짝임
+    if (theme.orc) {                   // 오크 주둔지: 횃불 일렁임 + 해골 눈빛
+      drawMapFlames(ctx, view.time, ORC_FLAMES, FLAME_ORANGE);
+      drawSkullEyes(ctx, view.time);
+    }
+    if (theme.demon) {                 // 악마성: 촛불 일렁임 + 가고일 눈빛 + 창문 불 켜고 끄기
+      drawDemonWindows(ctx, view.time);
+      drawMapFlames(ctx, view.time, DEMON_CANDLES, FLAME_CANDLE);
+      drawRedEyes(ctx, DEMON_GARGOYLE_EYES, pulseLevel(view.time, GARGOYLE_EYE_PULSE), 8);
+    }
+    if (theme.darkTemple) {            // 카르테논 신전(최종): 1챕터와 같은 연출을 붉은빛으로 + 석상 눈동자 움직임
+      if (!theme.entry.darkCrackGlow) theme.entry.darkCrackGlow = buildCrackGlow(theme.img, DARK_CRACKS);
+      drawMapFlames(ctx, view.time, DARK_FLAMES, FLAME_RED);
+      drawDarkStatueEyes(ctx, view.time);
+      drawCrackGlow(ctx, view, theme.entry.darkCrackGlow);
+    }
+    if (theme.ant) drawAntNest(ctx, view);   // 개미굴: 굴 안쪽 빛 맥동 + 바닥 균열 빛(1챕터식) + 알 빛
   } else {
     // 이미지를 불러오지 못했을 때의 기본 배경 + 격자
     ctx.fillStyle = COLORS.bg;
@@ -2030,8 +2546,9 @@ function render(ctx, state, view) {
 
   // 중앙 거점 + HP 링
   const hpRatio = state.coreHp / state.maxCoreHp;
-  if (CORE_SPRITE.img) {
-    drawCoreSprite(ctx, core, state, hpRatio);
+  const coreSprite = coreSpriteFor(state.chapterId);
+  if (coreSprite) {
+    drawCoreSprite(ctx, core, state, coreSprite);
   } else {
   ctx.save();
   ctx.shadowColor = COLORS.coreLine;
@@ -2252,6 +2769,9 @@ function render(ctx, state, view) {
     ctx.globalAlpha = 1;
     ctx.lineWidth = 1;
   }
+
+  // 설원 숲: 휘날리는 눈 (유닛 위, 배치 미리보기 아래)
+  if (theme.snow) drawSnowfall(ctx, view.time);
 
   // 배치 미리보기 (카드 선택 중 마우스 위치)
   if (placing && view.mouse && view.hoverRemnantUid === null) {
