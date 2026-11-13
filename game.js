@@ -1075,7 +1075,7 @@ function processShadowAttacks(state) {
     }
     s.attackAt = state.elapsed;   // 공격 애니메이션용
     faceToward(s, t.x);           // 그림 방향(표시 전용): 공격하는 적 쪽
-    const fx = addEffect(state, s.x, s.y, t.x, t.y, 'extracted', findEnemyData(s.sourceEnemyId).attackFx);
+    const fx = addEffect(state, s.x, s.y, t.x, t.y, 'extracted', enemyFxStyle(s.sourceEnemyId, state.chapterId));
     fx.facing = s.facing;
     fx.radius = s.attackRange;
     s.cooldown = s.attackInterval;
@@ -1099,7 +1099,7 @@ function processEnemyAttacks(state) {
       // 탄환은 거점 가장자리까지 날아감 (근접형은 원래대로 거점 쪽)
       const d = dist(e.x, e.y, core.x, core.y) || 1;
       const hx = core.x + (e.x - core.x) / d * core.radius * 0.7, hy = core.y + (e.y - core.y) / d * core.radius * 0.7;
-      const cfx = addEffect(state, e.x, e.y, hx, hy, 'enemy', findEnemyData(e.typeId).attackFx);
+      const cfx = addEffect(state, e.x, e.y, hx, hy, 'enemy', enemyFxStyle(e.typeId, state.chapterId));
       cfx.facing = e.facing;
       cfx.radius = e.attackRange;
       e.cooldown = e.attackInterval;
@@ -1115,7 +1115,7 @@ function processEnemyAttacks(state) {
     }
     faceToward(e, target.x);
     e.attackAt = state.elapsed;   // 공격 애니메이션용
-    const fx = addEffect(state, e.x, e.y, target.x, target.y, 'enemy', findEnemyData(e.typeId).attackFx);
+    const fx = addEffect(state, e.x, e.y, target.x, target.y, 'enemy', enemyFxStyle(e.typeId, state.chapterId));
     fx.facing = e.facing;
     fx.radius = e.attackRange;
     e.cooldown = e.attackInterval;
@@ -1174,7 +1174,7 @@ function checkWaveComplete(state) {
 
 // 공격 연출 (게임 규칙에 영향 없음). style: 없으면 공격 선, 'claw'면 할퀴기 자국
 const LINE_FX_TIME = 0.12;
-const ATTACK_FX_TIME = { claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36, bolt: 0.28, blast: 0.4, breath: 0.55, orb: 0.56, berclaw: 0.28 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
+const ATTACK_FX_TIME = { claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36, bolt: 0.28, blast: 0.4, breath: 0.55, orb: 0.56, berclaw: 0.28, centclaw: 0.4, iceclaw: 0.42, icewave: 0.4 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
 const ORB_IMPACT_TIME = 0.18;   // 마력구가 닿은 뒤 터지며 흩어지는 시간(초)
 function addEffect(state, x1, y1, x2, y2, kind, style) {
   const ttl = ATTACK_FX_TIME[style] || LINE_FX_TIME;
@@ -1395,6 +1395,22 @@ const SPRITES = {
       walk:   { row: 4, frames: 6, fps: 10, stride: 36, groundY: 62 },
     },
   },
+  'EN_001@ch2': {   // 2챕터 일반형 (얼음 엘프). 줄마다 몸 무게중심·발끝을 맞춰 96×54 칸으로 정렬, 쓰러짐 끝 프레임은 앞으로 쓰러지게
+    src: 'assets/sprites/en_001_ch2.png',
+    cellW: 96, cellH: 54,
+    scale: 1,
+    anchorX: 34,      // 칸 안에서 몸 가운데 x (긴 머리·망토가 뒤로 늘어짐)
+    bodyTop: 6,       // 걷는 줄의 머리카락 끝 높이 (HP바 위치)
+    shadow: { w: 15, h: 3, dx: 2 },
+    attackFx: 'icewave',   // 이 챕터에서만 공격 이펙트도 바꿈 (기본 모습은 데이터의 attackFx 'claw')
+    anims: {
+      idle:   { row: 0, frames: 4, fps: 4, groundY: 52 },
+      walk:   { row: 1, frames: 6, fps: 8, stride: 30, groundY: 52 },   // 걷기 한 바퀴(6프레임)에 30px
+      attack: { row: 2, frames: 5, fps: 10, strikeFrame: 2, groundY: 52 },   // 0~1 주먹을 당김, 2 크게 내지르기(타격), 3~4 망토를 두르며 복귀
+      hit:    { row: 3, frames: 2, fps: 10, groundY: 52 },
+      death:  { row: 4, frames: 5, fps: 8, groundY: 52 },
+    },
+  },
   EN_002: {   // 돌격형 (말 탄 얼음 요정)
     src: 'assets/sprites/en_002.png',
     cellW: 64, cellH: 60,
@@ -1410,6 +1426,22 @@ const SPRITES = {
       death:  { row: 3, frames: 5, fps: 9, groundY: 58 },
     },
   },
+  'EN_002@ch1': {   // 1챕터 돌격형 (붉은 지네). 줄마다 흰 배 가운데·맨 아래를 맞춰 80×62 칸으로 정렬, 덮치기·쓰러짐 끝 프레임은 원본 간격 유지
+    src: 'assets/sprites/en_002_ch1.png',
+    cellW: 80, cellH: 62,
+    scale: 1,
+    anchorX: 34,      // 칸 안에서 흰 배 가운데 x
+    bodyTop: 17,      // 기어가는 줄의 머리 뿔 끝 높이 (HP바 위치)
+    shadow: { w: 22, h: 3, dx: 0 },
+    attackFx: 'centclaw',   // 이 챕터에서만 공격 이펙트도 바꿈 (기본 모습은 데이터의 attackFx 'ice')
+    anims: {
+      idle:   { row: 0, frames: 4, fps: 5, groundY: 60 },
+      walk:   { row: 1, frames: 6, fps: 10, stride: 36, groundY: 60 },   // 기어가기 한 바퀴(6프레임)에 36px
+      attack: { row: 2, frames: 5, fps: 10, strikeFrame: 3, groundY: 60 },   // 0 대기, 1~2 몸을 세움, 3 앞으로 덮쳐 턱 내려찍기(타격), 4 여운
+      hit:    { row: 3, frames: 2, fps: 10, groundY: 60 },
+      death:  { row: 4, frames: 5, fps: 9, groundY: 60 },
+    },
+  },
   EN_003: {   // 중장갑형 (푸른 균열 코브라). 줄마다 연결 덩어리로 프레임을 나누고 흰 배 가운데·몸 아래를 맞춰 108×64 칸으로 정렬
     src: 'assets/sprites/en_003.png',
     cellW: 108, cellH: 64,
@@ -1423,6 +1455,22 @@ const SPRITES = {
       attack: { row: 2, frames: 5, fps: 9, strikeFrame: 3, groundY: 62 },   // 0~2 고개를 들고 입을 벌림, 3 앞으로 물기(타격), 4 복귀
       hit:    { row: 3, frames: 2, fps: 10, groundY: 62 },
       death:  { row: 4, frames: 5, fps: 8, groundY: 62 },
+    },
+  },
+  'EN_003@ch2': {   // 2챕터 중장갑형 (얼음 곰). 줄마다 몸 무게중심·발끝을 맞춰 100×54 칸으로 정렬, 덮치기·쓰러짐 끝 프레임은 앞으로 나아가게
+    src: 'assets/sprites/en_003_ch2.png',
+    cellW: 100, cellH: 54,
+    scale: 1,
+    anchorX: 42,      // 칸 안에서 몸 가운데 x
+    bodyTop: 14,      // 걷는 줄의 등 털 끝 높이 (HP바 위치)
+    shadow: { w: 26, h: 4, dx: 2 },
+    attackFx: 'iceclaw',   // 이 챕터에서만 공격 이펙트도 바꿈 (기본 모습은 데이터의 attackFx 'bite')
+    anims: {
+      idle:   { row: 0, frames: 4, fps: 4, groundY: 52 },
+      walk:   { row: 1, frames: 6, fps: 6, stride: 30, groundY: 52 },   // 걷기 한 바퀴(6프레임)에 30px (느린 유닛)
+      attack: { row: 2, frames: 5, fps: 9, strikeFrame: 4, strikeHold: 0.22, groundY: 52 },   // 0~1 웅크림, 2~3 일어서 포효·앞발 치켜듦, 4 앞으로 덮쳐 내려찍기(타격, 잠시 유지)
+      hit:    { row: 3, frames: 2, fps: 10, groundY: 52 },
+      death:  { row: 4, frames: 5, fps: 8, groundY: 52 },
     },
   },
   SH_001: {   // 아이언 (방패 기사). 원본 격자가 고르지 않아 프레임마다 발 가운데·발끝을 맞춰 72×64 칸으로 정렬
@@ -1544,6 +1592,12 @@ function spriteFor(typeId, chapterId) {
   }
   const cfg = SPRITES[typeId];
   return cfg && cfg.img ? cfg : null;
+}
+
+// 적 공격 이펙트 종류: 챕터별 모습에 attackFx가 있으면 그것(그 모습을 불러왔을 때만), 없으면 데이터의 attackFx
+function enemyFxStyle(typeId, chapterId) {
+  const cfg = spriteFor(typeId, chapterId);
+  return (cfg && cfg.attackFx) || findEnemyData(typeId).attackFx;
 }
 
 function spriteGroundY(y) { return y + SPRITE_FEET_OFFSET; }
@@ -2353,7 +2407,37 @@ const BERCLAW_FX = {
   reach: 36,     // 베르가 바라보는 쪽으로 떨어진 거리(px) = 뻗은 발톱 끝(칸 x 91) 바로 앞
   // 원본은 아래→위로 긋는 모양이라 위아래를 뒤집어 위→아래로 할퀴게 그림 (upright 없음)
 };
-const ATTACK_FX = { claw: CLAW_FX, slash: SLASH_FX, ice: ICE_FX, bearclaw: BEARCLAW_FX, slam: SLAM_FX, bite: BITE_FX, berclaw: BERCLAW_FX };
+// 1챕터 돌격형(지네) 덮치기 (assets/sprites/fx_centclaw.png, 72×54 도트 5프레임): 붉은 발톱 호가 내리꽂히며 흙먼지가 터짐.
+// 줄 0 원본(적) · 줄 1 보랏빛(추출 그림자). 땅에서 터지는 충격이라 위아래 그대로, 그림 바닥을 지네 발끝 높이에 맞춰 바라보는 쪽 앞에 그림
+const CENTCLAW_FX = {
+  src: 'assets/sprites/fx_centclaw.png', w: 72, h: 54, frames: 5,
+  rows: { enemy: 0, extracted: 1 },
+  glow: { enemy: 'rgba(255, 70, 80, 0.45)', extracted: 'rgba(160, 120, 255, 0.6)' },
+  bodyLift: 14,  // 그림 바닥(칸 y 53)이 발끝(판정 위치 +12)에 오도록
+  reach: 24,     // 지네가 바라보는 쪽으로 떨어진 거리(px) = 덮치는 턱 끝 앞
+  upright: true, // 위아래 반전 안 함
+};
+// 2챕터 중장갑형(얼음 곰) 내려찍기 (assets/sprites/fx_iceclaw.png, 64×60 도트 6프레임): 푸른 얼음 발톱 호가 솟구치며 바닥에서 터짐.
+// 줄 0 원본(적) · 줄 1 보랏빛(추출 그림자). 위아래 그대로, 그림 바닥을 곰 발끝 높이에 맞춰 뻗은 앞발 앞에 그림
+const ICECLAW_FX = {
+  src: 'assets/sprites/fx_iceclaw.png', w: 64, h: 60, frames: 6,
+  rows: { enemy: 0, extracted: 1 },
+  glow: { enemy: 'rgba(90, 170, 255, 0.55)', extracted: 'rgba(160, 120, 255, 0.6)' },
+  bodyLift: 17,  // 그림 바닥(칸 y 59)이 발끝(판정 위치 +12)에 오도록
+  reach: 44,     // 곰이 바라보는 쪽으로 떨어진 거리(px) = 내려찍는 앞발 끝
+  upright: true, // 위아래 반전 안 함
+};
+// 2챕터 일반형(얼음 엘프) 주먹 물결 (assets/sprites/fx_icewave.png, 60×50 도트 6프레임): 내지른 주먹 앞 바닥에서 얼음 물결이 솟았다가 조각으로 흩어짐.
+// 줄 0 원본(적) · 줄 1 보랏빛(추출 그림자). 위아래 그대로, 그림 바닥을 엘프 발끝 높이에 맞춰 바라보는 쪽 앞에 그림
+const ICEWAVE_FX = {
+  src: 'assets/sprites/fx_icewave.png', w: 60, h: 50, frames: 6,
+  rows: { enemy: 0, extracted: 1 },
+  glow: { enemy: 'rgba(110, 170, 255, 0.55)', extracted: 'rgba(160, 120, 255, 0.6)' },
+  bodyLift: 12,  // 그림 바닥(칸 y 49)이 발끝(판정 위치 +12)에 오도록
+  reach: 32,     // 엘프가 바라보는 쪽으로 떨어진 거리(px) = 내지른 주먹 앞
+  upright: true, // 위아래 반전 안 함
+};
+const ATTACK_FX = { icewave: ICEWAVE_FX, iceclaw: ICECLAW_FX, claw: CLAW_FX, slash: SLASH_FX, ice: ICE_FX, bearclaw: BEARCLAW_FX, slam: SLAM_FX, bite: BITE_FX, berclaw: BERCLAW_FX, centclaw: CENTCLAW_FX };
 
 // 잔영 (assets/sprites/remnant.png): 보랏빛 그림자 불꽃 6프레임 반복. 파일이 없으면 기존 원형으로 그림
 //  - 바닥 웅덩이를 쓰러진 적의 발밑에 맞춤. 클릭 판정(잔영 위치 반경 16px)은 그대로
@@ -2651,7 +2735,7 @@ function drawCoreSprite(ctx, core, state, C) {
 const CORE_HP_LOW = 50;   // 거점 HP가 이 값 이하면 숫자를 붉게
 
 function loadFxSheets() {
-  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, SLAM_FX, BITE_FX, BERCLAW_FX, BREATH_FX, ORB_FX, REMNANT_FX, DEMON_WINDOWS, ANT_GLOW, ...Object.values(CORE_SPRITES)]) {
+  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, SLAM_FX, BITE_FX, BERCLAW_FX, CENTCLAW_FX, ICECLAW_FX, ICEWAVE_FX, BREATH_FX, ORB_FX, REMNANT_FX, DEMON_WINDOWS, ANT_GLOW, ...Object.values(CORE_SPRITES)]) {
     const img = new Image();
     img.onload = () => { fx.img = fx.shade ? buildTintedSheet(img, fx.shade) : img; };
     img.onerror = () => console.warn(`[이펙트 불러오기 실패] ${fx.src}`);
