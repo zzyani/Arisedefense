@@ -344,6 +344,12 @@ function makeBasicUnit(state, d, x, y) {
     facing: x < GAME_DATA.field.core.x ? -1 : 1,   // 그림 방향(표시 전용): 거점 바깥쪽을 봄
     // 준비 단계에서 배치한 그림자만 회수 가능. 웨이브가 시작되면 false로 잠김
     recallable: state.status === STATUS.PREPARATION,
+    // 돌격(charge)이 있는 그림자(베르): 배치한 자리(origin)를 지키다가 범위 안 적에게 달려가 붙어서 공격하고, 적이 없으면 돌아옴
+    ...(d.charge ? {
+      mobile: true, originX: x, originY: y, moveSpeed: d.charge.speed,
+      detectionRadius: d.charge.search, maxRoamRadius: d.charge.leash,
+      targetId: null, moving: false,
+    } : {}),
   };
 }
 
@@ -718,7 +724,7 @@ function serializeRun(state) {
     coreHp: state.coreHp,
     stats: Object.assign({}, state.stats, { waveKills: 0 }),
     basic: state.basicUnits.filter((u) => u.alive).map((u) => ({
-      typeId: u.typeId, x: u.x, y: u.y, hp: u.hp, energyCostPaid: u.energyCostPaid,
+      typeId: u.typeId, x: u.mobile ? u.originX : u.x, y: u.mobile ? u.originY : u.y, hp: u.hp, energyCostPaid: u.energyCostPaid,
     })),
     extracted: state.extractedUnits.filter((u) => u.alive).map((u) => ({
       sourceEnemyId: u.sourceEnemyId, x: u.originX, y: u.originY, hp: u.hp, energyCostPaid: u.energyCostPaid,
@@ -802,6 +808,7 @@ function updateGame(state, dt) {
   updateRemnants(state, dt);              // 2. 잔영 시간 갱신
   updateEnemyMovement(state, dt);         // 3. 적 이동 / 거점 도달 (도달하면 멈춰서 거점 공격)
   updateExtractedAI(state, dt);           // 4. 추출 그림자 탐색 / 추격 / 복귀
+  updateChargingBasics(state, dt);        //    돌격하는 기본 그림자(베르): 달려가 붙기 / 복귀
   updateCooldowns(state, dt);             // 5. 쿨타임
   const killed = processShadowAttacks(state); // 6. 그림자 공격 (기본 + 추출)
   processEnemyAttacks(state);             //    적 공격: 그림자 또는 거점 (이번 틱에 죽은 적은 공격하지 않음)
@@ -910,6 +917,35 @@ function moveToCoreSlot(e, core, step) {
 }
 
 // 추출 그림자 AI: SPAWN → IDLE → CHASE → ATTACK → (대상 사망) → IDLE / RETURN
+// 돌격하는 기본 그림자(베르): 추출 그림자와 같은 방식으로 탐색·추격하되, 배치한 자리(origin)에서 leash 안에서만 움직이고
+// 붙으면(공격 사거리 안) 멈춰서 공격. 대상이 없으면 배치한 자리로 돌아감 (공격 자체는 processShadowAttacks)
+function updateChargingBasics(state, dt) {
+  const ex = GAME_DATA.extraction;
+  for (const u of state.basicUnits) {
+    if (!u.alive || !u.mobile) continue;
+    let target = u.targetId === null ? null : state.enemies.find((e) => e.uid === u.targetId);
+    if (!canChase(u, target)) target = findChaseTarget(state, u);
+    u.targetId = target ? target.uid : null;
+    u.moving = false;
+    if (target) {
+      faceToward(u, target.x);
+      if (dist(u.x, u.y, target.x, target.y) <= u.attackRange) continue;   // 붙었음: 멈춰서 공격
+      moveAroundCore(u, target.x, target.y, u.moveSpeed * dt, u.attackRange * 0.9);
+      clampToRoam(u);
+      clampToField(u);
+      pushOutOfCore(u);
+      u.moving = true;
+      continue;
+    }
+    if (dist(u.x, u.y, u.originX, u.originY) > 0.5) {   // 돌아가기
+      faceToward(u, u.originX);
+      moveAroundCore(u, u.originX, u.originY, u.moveSpeed * dt, 0);
+      u.moving = true;
+      if (dist(u.x, u.y, u.originX, u.originY) < 0.5) { u.x = u.originX; u.y = u.originY; u.moving = false; }
+    }
+  }
+}
+
 function updateExtractedAI(state, dt) {
   const ex = GAME_DATA.extraction;
   for (const s of state.extractedUnits) {
@@ -1120,12 +1156,15 @@ function checkWaveComplete(state) {
   // 웨이브가 끝나면 추출하지 않은 잔영은 모두 사라짐 → 준비 단계에는 잔영이 남지 않음
   state.remnants = [];
   state.selectedRemnantUid = null;
+  for (const u of state.basicUnits) {   // 돌격하는 그림자는 배치한 자리로 돌려놓음 (다음 웨이브 준비·저장은 그 자리 기준)
+    if (u.mobile) { u.x = u.originX; u.y = u.originY; u.targetId = null; u.moving = false; }
+  }
   setStatus(state, isLast ? STATUS.VICTORY : STATUS.WAVE_CLEAR);
 }
 
 // 공격 연출 (게임 규칙에 영향 없음). style: 없으면 공격 선, 'claw'면 할퀴기 자국
 const LINE_FX_TIME = 0.12;
-const ATTACK_FX_TIME = { claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36, bolt: 0.28, blast: 0.4, breath: 0.55, orb: 0.56 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
+const ATTACK_FX_TIME = { claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36, bolt: 0.28, blast: 0.4, breath: 0.55, orb: 0.56, berclaw: 0.28 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
 const ORB_IMPACT_TIME = 0.18;   // 마력구가 닿은 뒤 터지며 흩어지는 시간(초)
 function addEffect(state, x1, y1, x2, y2, kind, style) {
   const ttl = ATTACK_FX_TIME[style] || LINE_FX_TIME;
@@ -1175,6 +1214,7 @@ function validateGameData(data) {
     if (s.targetType === 'splash' && !isPos(s.splashRadius)) errors.push(`shadows ${s.id}: splash 공격은 splashRadius가 필요합니다.`);
     if (s.targetType === 'line' && !(isPos(s.lineLength) && isPos(s.lineWidth))) errors.push(`shadows ${s.id}: line 공격은 lineLength·lineWidth가 필요합니다.`);
     if (s.hitDelay !== undefined && !(s.hitDelay >= 0 && s.hitDelay < s.attackInterval)) errors.push(`shadows ${s.id}: hitDelay는 0 이상, 공격 간격보다 짧아야 합니다.`);
+    if (s.charge !== undefined && !(s.charge && isPos(s.charge.speed) && isPos(s.charge.search) && isPos(s.charge.leash))) errors.push(`shadows ${s.id}: charge는 speed·search·leash(양수)가 필요합니다.`);
     if (s.unlockAfterChapter !== undefined && !(data.chapters || []).some((ch) => ch.chapterId === s.unlockAfterChapter)) errors.push(`shadows ${s.id}: unlockAfterChapter ${s.unlockAfterChapter} 챕터가 없습니다.`);
   }
   const extraCards = data.shadows.filter((s) => s.unlockAfterChapter !== undefined).length;
@@ -1430,6 +1470,23 @@ const SPRITES = {
       walk:   { row: 1, frames: 6, fps: 8, stride: 40, groundY: 66 },   // 기본 그림자는 제자리라 지금은 쓰지 않음
       // 0~2 두 손을 모았다가 앞으로, 3 손을 뻗어 마력구를 모아 던짐(타격), 4 복귀. 3번은 마력구를 모으는 동안 유지
       attack: { row: 2, frames: 5, fps: 9, strikeFrame: 3, strikeHold: 0.22, groundY: 66 },
+      hit:    { row: 3, frames: 2, fps: 10, groundY: 66 },
+      death:  { row: 4, frames: 5, fps: 8, groundY: 66 },
+    },
+  },
+  SH_006: {   // 베르 (날개 달린 개미 왕). 프레임마다 어두운 몸 가운데 x·발끝을 맞춰 104×68 칸으로 정렬
+    src: 'assets/sprites/sh_006.png',   // 원본이 이미 보랏빛이라 색은 그대로. 반투명 날개는 살짝만 더 비치게, 눈·몸의 보랏빛 빛은 조금 밝게 (몸 색은 원본)
+    cellW: 104, cellH: 68,
+    scale: 1,
+    glow: true,       // 그림자 유닛: 보랏빛 윤곽 빛
+    anchorX: 50,      // 칸 안에서 몸 가운데 x
+    bodyTop: 4,       // 머리 가시 끝 높이 (HP바 위치)
+    shadow: { w: 16, h: 3, dx: 0, op: 1.2 },
+    anims: {
+      idle:   { row: 0, frames: 4, fps: 8, groundY: 66 },   // 날갯짓 (빠르게)
+      walk:   { row: 1, frames: 6, fps: 12, stride: 50, groundY: 66 },   // 기본 그림자는 제자리라 지금은 쓰지 않음
+      // 0 웅크림, 1 손을 뻗음, 2 발톱으로 할큄(타격), 3~4 복귀. 공격 간격이 0.45초라 빠르게 재생
+      attack: { row: 2, frames: 5, fps: 14, strikeFrame: 2, groundY: 66 },
       hit:    { row: 3, frames: 2, fps: 10, groundY: 66 },
       death:  { row: 4, frames: 5, fps: 8, groundY: 66 },
     },
@@ -2269,7 +2326,16 @@ function drawOrbFx(ctx, fx, state) {
   ctx.restore();
   return true;
 }
-const ATTACK_FX = { claw: CLAW_FX, slash: SLASH_FX, ice: ICE_FX, bearclaw: BEARCLAW_FX, slam: SLAM_FX, bite: BITE_FX };
+// 베르 할퀴기 (assets/sprites/fx_berclaw.png, 80×60 도트 6프레임, 보랏빛 초승달). 베르가 바라보는 쪽, 뻗은 발톱 앞에 위→아래로 그림
+const BERCLAW_FX = {
+  src: 'assets/sprites/fx_berclaw.png', w: 80, h: 60, frames: 6,
+  rows: {},
+  glow: { shadow: 'rgba(169, 139, 255, 0.6)' },
+  bodyLift: 17,  // 판정 위치에서 위로(px) = 할퀴는 프레임의 발톱 높이 (칸 y 37, 발끝 y 66은 판정 위치 아래 12px)
+  reach: 36,     // 베르가 바라보는 쪽으로 떨어진 거리(px) = 뻗은 발톱 끝(칸 x 91) 바로 앞
+  // 원본은 아래→위로 긋는 모양이라 위아래를 뒤집어 위→아래로 할퀴게 그림 (upright 없음)
+};
+const ATTACK_FX = { claw: CLAW_FX, slash: SLASH_FX, ice: ICE_FX, bearclaw: BEARCLAW_FX, slam: SLAM_FX, bite: BITE_FX, berclaw: BERCLAW_FX };
 
 // 잔영 (assets/sprites/remnant.png): 보랏빛 그림자 불꽃 6프레임 반복. 파일이 없으면 기존 원형으로 그림
 //  - 바닥 웅덩이를 쓰러진 적의 발밑에 맞춤. 클릭 판정(잔영 위치 반경 16px)은 그대로
@@ -2567,7 +2633,7 @@ function drawCoreSprite(ctx, core, state, C) {
 const CORE_HP_LOW = 50;   // 거점 HP가 이 값 이하면 숫자를 붉게
 
 function loadFxSheets() {
-  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, SLAM_FX, BITE_FX, BREATH_FX, ORB_FX, REMNANT_FX, DEMON_WINDOWS, ANT_GLOW, ...Object.values(CORE_SPRITES)]) {
+  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, SLAM_FX, BITE_FX, BERCLAW_FX, BREATH_FX, ORB_FX, REMNANT_FX, DEMON_WINDOWS, ANT_GLOW, ...Object.values(CORE_SPRITES)]) {
     const img = new Image();
     img.onload = () => { fx.img = fx.shade ? buildTintedSheet(img, fx.shade) : img; };
     img.onerror = () => console.warn(`[이펙트 불러오기 실패] ${fx.src}`);
@@ -2754,6 +2820,10 @@ function render(ctx, state, view) {
   // 범위 표시 (D 키)
   if (view.showRanges) {
     for (const u of state.basicUnits) {
+      if (u.mobile) {   // 돌격하는 그림자: 움직일 수 있는 범위(배치한 자리 기준)
+        ctx.fillStyle = COLORS.roam;
+        drawCircle(ctx, u.originX, u.originY, u.maxRoamRadius); ctx.fill();
+      }
       ctx.fillStyle = COLORS.range;
       ctx.strokeStyle = COLORS.rangeLine;
       drawCircle(ctx, u.x, u.y, u.attackRange); ctx.fill(); ctx.stroke();
@@ -2804,9 +2874,9 @@ function render(ctx, state, view) {
   for (const u of state.basicUnits) {
     const d = findShadowData(u.typeId);
     const cfg = spriteFor(u.typeId);
-    if (cfg) {   // 스프라이트: 대기·공격·피격 애니메이션 (제자리 고정)
+    if (cfg) {   // 스프라이트: 대기·공격·피격 애니메이션 (대부분 제자리 고정, 돌격하는 그림자는 이동도)
       const engaged = findBasicTargets(state, u).length > 0;
-      const pick = pickAnim(u, state.elapsed, false, cfg, engaged);
+      const pick = pickAnim(u, state.elapsed, !!u.moving, cfg, engaged);   // 돌격하는 그림자는 달리는 동안 이동 동작
       drawGroundShadow(ctx, cfg, pick.anim, pick.frame, u.x, u.y, 1, 1, GROUND_SHADOW);
       const selected = state.selectedUnitUid === u.uid;
       const recallHover = !selected && view.hoverUnitUid === u.uid && canRecall(state, u).ok;
@@ -2977,7 +3047,7 @@ function render(ctx, state, view) {
     ctx.stroke();
     ctx.lineWidth = 1;
     ctx.setLineDash([4, 4]);
-    drawCircle(ctx, view.mouse.x, view.mouse.y, d.attackRange); ctx.stroke();
+    drawCircle(ctx, view.mouse.x, view.mouse.y, d.charge ? d.charge.leash : d.attackRange); ctx.stroke();   // 돌격하는 그림자는 달려갈 수 있는 범위
     ctx.setLineDash([]);
   }
 }

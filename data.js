@@ -59,6 +59,8 @@ const GAME_DATA = {
   //                lineMaxTilt: 줄기가 위아래로 꺾이는 최대 각도(라디안), 가까운 적에게 급하게 꺾이지 않게 부드럽게 눌러 줌)
   //  unlockAfterChapter: 그 챕터를 클리어하면 카드가 생김 (없으면 처음부터 사용). 카드가 늘 때마다 기본 그림자 최대 수 +1
   //  hitDelay: 있으면 공격 이펙트가 날아가 닿는 시각(초 뒤)에 피해가 들어감 (어금니 마력구)
+  //  charge: 있으면 배치한 자리를 지키다가 적에게 달려가 붙어서 공격 (베르). speed 이동 속도, search 자기 둘레 탐색 반경,
+  //          leash 배치한 자리에서 움직일 수 있는 최대 거리. 적이 없으면 돌아오고, 웨이브가 끝나면 배치한 자리로
   //  cardImage·attackFx·스프라이트가 없으면 카드는 색 띠만, 공격은 기본 연출(공격 선·탄환·폭발 원)로 표시
   shadows: [
     { id: 'SH_001', name: '아이언',   role: 'tank',   cost: 30, maxHp: 300, attack: 20, attackInterval: 1.5, attackRange: 100, targetType: 'single',       color: '#4f86ff', attackFx: 'slam', cardImage: 'assets/cards/sh_001.webp' },
@@ -66,7 +68,7 @@ const GAME_DATA = {
     { id: 'SH_003', name: '탱크',     role: 'area',   cost: 40, maxHp: 220, attack: 35, attackInterval: 2.0, attackRange: 110, targetType: 'all_in_range', color: '#2ec4b6', attackFx: 'bearclaw', cardImage: 'assets/cards/sh_003.webp' },
     { id: 'SH_005', name: '카이셀',   role: 'area',   cost: 55, maxHp: 180, attack: 28, attackInterval: 2.2, attackRange: 150, targetType: 'line', lineLength: 180, lineWidth: 36, lineMaxTilt: 0.9, color: '#5fd0ff', attackFx: 'breath', cardImage: 'assets/cards/sh_005.webp', unlockAfterChapter: 4 },
     { id: 'SH_004', name: '어금니',   role: 'magic',  cost: 45, maxHp: 120, attack: 38, attackInterval: 1.6, attackRange: 170, targetType: 'single',       color: '#ff8a3d', attackFx: 'orb', hitDelay: 0.38, cardImage: 'assets/cards/sh_004.webp', unlockAfterChapter: 3 },
-    { id: 'SH_006', name: '베르',     role: 'speed',  cost: 50, maxHp: 200, attack: 20, attackInterval: 0.45, attackRange: 70, targetType: 'single',       color: '#b8f04a', unlockAfterChapter: 5 },
+    { id: 'SH_006', name: '베르',     role: 'speed',  cost: 50, maxHp: 200, attack: 20, attackInterval: 0.45, attackRange: 38, targetType: 'single',       color: '#b8f04a', charge: { speed: 160, search: 160, leash: 150 }, attackFx: 'berclaw', cardImage: 'assets/cards/sh_006.webp', unlockAfterChapter: 5 },
   ],
 
   // 적. targetType: 없으면 한 명, all_in_range면 사거리 안 그림자 전부
