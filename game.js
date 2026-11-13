@@ -1174,7 +1174,7 @@ function checkWaveComplete(state) {
 
 // 공격 연출 (게임 규칙에 영향 없음). style: 없으면 공격 선, 'claw'면 할퀴기 자국
 const LINE_FX_TIME = 0.12;
-const ATTACK_FX_TIME = { claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36, bolt: 0.28, blast: 0.4, breath: 0.55, orb: 0.56, berclaw: 0.28, centclaw: 0.4, iceclaw: 0.42, icewave: 0.4 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
+const ATTACK_FX_TIME = { claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36, bolt: 0.28, blast: 0.4, breath: 0.55, orb: 0.56, berclaw: 0.28, centclaw: 0.4, iceclaw: 0.42, icewave: 0.4, orcslash: 0.4, spear: 0.42, orcpunch: 0.46, axeslam: 0.42 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
 const ORB_IMPACT_TIME = 0.18;   // 마력구가 닿은 뒤 터지며 흩어지는 시간(초)
 function addEffect(state, x1, y1, x2, y2, kind, style) {
   const ttl = ATTACK_FX_TIME[style] || LINE_FX_TIME;
@@ -1411,6 +1411,38 @@ const SPRITES = {
       death:  { row: 4, frames: 5, fps: 8, groundY: 52 },
     },
   },
+  'EN_001@ch3': {   // 3챕터 일반형 (오크 전사). 줄마다 몸 무게중심·발끝을 맞춰 88×56 칸으로 정렬, 쓰러짐 끝 프레임은 앞으로 쓰러지게
+    src: 'assets/sprites/en_001_ch3.png',
+    cellW: 88, cellH: 56,
+    scale: 1,
+    anchorX: 36,      // 칸 안에서 몸 가운데 x
+    bodyTop: 12,      // 걷는 줄의 머리카락 끝 높이 (HP바 위치)
+    shadow: { w: 17, h: 3, dx: 0 },
+    attackFx: 'orcslash',   // 이 챕터에서만 공격 이펙트도 바꿈 (기본 모습은 데이터의 attackFx 'claw')
+    anims: {
+      idle:   { row: 0, frames: 4, fps: 4, groundY: 54 },
+      walk:   { row: 1, frames: 6, fps: 8, stride: 30, groundY: 54 },   // 걷기 한 바퀴(6프레임)에 30px
+      attack: { row: 2, frames: 5, fps: 10, strikeFrame: 3, groundY: 54 },   // 0 자세, 1~2 언월도를 머리 위로 치켜듦, 3 앞으로 내려베기(타격), 4 복귀
+      hit:    { row: 3, frames: 2, fps: 10, groundY: 54 },
+      death:  { row: 4, frames: 5, fps: 8, groundY: 54 },
+    },
+  },
+  'EN_004@ch3': {   // 3챕터 원거리형 (오크 창병). 줄마다 몸 무게중심·발끝을 맞춰 88×56 칸으로 정렬, 쓰러짐 끝 프레임은 앞으로 쓰러지게
+    src: 'assets/sprites/en_004_ch3.png',
+    cellW: 88, cellH: 56,
+    scale: 1,
+    anchorX: 36,      // 칸 안에서 몸 가운데 x
+    bodyTop: 10,      // 걷는 줄의 머리카락 끝 높이 (HP바 위치)
+    shadow: { w: 17, h: 3, dx: 0 },
+    attackFx: 'spear',   // 이 챕터에서만 공격 이펙트도 바꿈 (기본 모습은 데이터의 attackFx 'bolt')
+    anims: {
+      idle:   { row: 0, frames: 4, fps: 4, groundY: 54 },
+      walk:   { row: 1, frames: 6, fps: 8, stride: 30, groundY: 54 },   // 걷기 한 바퀴(6프레임)에 30px
+      attack: { row: 2, frames: 5, fps: 10, strikeFrame: 3, groundY: 54 },   // 0~1 창을 뒤로 당김, 2 머리 위로 들어올림, 3 던짐(타격), 4 복귀
+      hit:    { row: 3, frames: 2, fps: 10, groundY: 54 },
+      death:  { row: 4, frames: 5, fps: 8, groundY: 54 },
+    },
+  },
   EN_002: {   // 돌격형 (말 탄 얼음 요정)
     src: 'assets/sprites/en_002.png',
     cellW: 64, cellH: 60,
@@ -1442,6 +1474,22 @@ const SPRITES = {
       death:  { row: 4, frames: 5, fps: 9, groundY: 60 },
     },
   },
+  'EN_002@ch3': {   // 3챕터 돌격형 (붉은 오크 권투사). 줄마다 몸 무게중심·발끝을 맞춰 88×56 칸으로 정렬, 쓰러짐 끝 프레임은 앞으로 쓰러지게
+    src: 'assets/sprites/en_002_ch3.png',
+    cellW: 88, cellH: 56,
+    scale: 1,
+    anchorX: 36,      // 칸 안에서 몸 가운데 x
+    bodyTop: 7,       // 달리는 줄의 머리카락 끝 높이 (HP바 위치)
+    shadow: { w: 19, h: 3, dx: 0 },
+    attackFx: 'orcpunch',   // 이 챕터에서만 공격 이펙트도 바꿈 (기본 모습은 데이터의 attackFx 'ice')
+    anims: {
+      idle:   { row: 0, frames: 4, fps: 4, groundY: 54 },
+      walk:   { row: 1, frames: 6, fps: 10, stride: 40, groundY: 54 },   // 달리기 한 바퀴(6프레임)에 40px
+      attack: { row: 2, frames: 5, fps: 10, strikeFrame: 4, strikeHold: 0.3, groundY: 54 },   // 0 자세, 1 주먹을 당김, 2 몸을 낮춤, 3 내지르기, 4 끝까지 뻗음(타격, 장풍이 나가는 동안 유지)
+      hit:    { row: 3, frames: 2, fps: 10, groundY: 54 },
+      death:  { row: 4, frames: 5, fps: 8, groundY: 54 },
+    },
+  },
   EN_003: {   // 중장갑형 (푸른 균열 코브라). 줄마다 연결 덩어리로 프레임을 나누고 흰 배 가운데·몸 아래를 맞춰 108×64 칸으로 정렬
     src: 'assets/sprites/en_003.png',
     cellW: 108, cellH: 64,
@@ -1471,6 +1519,22 @@ const SPRITES = {
       attack: { row: 2, frames: 5, fps: 9, strikeFrame: 4, strikeHold: 0.22, groundY: 52 },   // 0~1 웅크림, 2~3 일어서 포효·앞발 치켜듦, 4 앞으로 덮쳐 내려찍기(타격, 잠시 유지)
       hit:    { row: 3, frames: 2, fps: 10, groundY: 52 },
       death:  { row: 4, frames: 5, fps: 8, groundY: 52 },
+    },
+  },
+  'EN_003@ch3': {   // 3챕터 중장갑형 (도끼 오크). 줄마다 몸 무게중심·발끝을 맞춰 80×58 칸으로 정렬 (원본 4배 축소, 다른 오크보다 조금 크게). 원본 발밑의 회색 바닥 줄은 지움
+    src: 'assets/sprites/en_003_ch3.png',
+    cellW: 80, cellH: 58,
+    scale: 1,
+    anchorX: 36,      // 칸 안에서 몸 가운데 x
+    bodyTop: 7,       // 걷는 줄의 머리카락 끝 높이 (HP바 위치)
+    shadow: { w: 21, h: 4, dx: 0 },
+    attackFx: 'axeslam',   // 이 챕터에서만 공격 이펙트도 바꿈 (기본 모습은 데이터의 attackFx 'bite')
+    anims: {
+      idle:   { row: 0, frames: 4, fps: 4, groundY: 56 },
+      walk:   { row: 1, frames: 6, fps: 6, stride: 26, groundY: 56 },   // 걷기 한 바퀴(6프레임)에 26px (느린 유닛)
+      attack: { row: 2, frames: 5, fps: 9, strikeFrame: 3, strikeHold: 0.2, groundY: 56 },   // 0 자세, 1 도끼를 당김, 2 머리 위로 치켜듦, 3 내려찍기(타격, 잠시 유지), 4 도끼를 박은 채 버팀
+      hit:    { row: 3, frames: 2, fps: 10, groundY: 56 },
+      death:  { row: 4, frames: 5, fps: 8, groundY: 56 },
     },
   },
   SH_001: {   // 아이언 (방패 기사). 원본 격자가 고르지 않아 프레임마다 발 가운데·발끝을 맞춰 72×64 칸으로 정렬
@@ -2437,7 +2501,75 @@ const ICEWAVE_FX = {
   reach: 32,     // 엘프가 바라보는 쪽으로 떨어진 거리(px) = 내지른 주먹 앞
   upright: true, // 위아래 반전 안 함
 };
-const ATTACK_FX = { icewave: ICEWAVE_FX, iceclaw: ICECLAW_FX, claw: CLAW_FX, slash: SLASH_FX, ice: ICE_FX, bearclaw: BEARCLAW_FX, slam: SLAM_FX, bite: BITE_FX, berclaw: BERCLAW_FX, centclaw: CENTCLAW_FX };
+// 3챕터 일반형(오크 전사) 언월도 베기 (assets/sprites/fx_orcslash.png, 62×50 도트 6프레임, 원본 7배 축소): 붉은 초승달 칼자국이 커졌다가 조각으로 흩어짐.
+// 줄 0 원본(적) · 줄 1 보랏빛(추출 그림자). 바닥에서 위로 휘감는 모양이라 위아래 그대로, 그림 바닥을 오크 발끝 높이에 맞춰 내려벤 칼끝 앞에 그림
+const ORCSLASH_FX = {
+  src: 'assets/sprites/fx_orcslash.png', w: 62, h: 50, frames: 6,
+  rows: { enemy: 0, extracted: 1 },
+  glow: { enemy: 'rgba(255, 70, 80, 0.45)', extracted: 'rgba(160, 120, 255, 0.6)' },
+  bodyLift: 11,  // 그림 바닥(칸 y 48)이 발끝(판정 위치 +12)에 오도록
+  reach: 30,     // 오크가 바라보는 쪽으로 떨어진 거리(px) = 내려벤 칼끝 앞
+  upright: true, // 위아래 반전 안 함
+};
+// 3챕터 원거리형(오크 창병) 투창 (assets/sprites/fx_spear.png, 70×42 도트 6프레임, 원본 7배 축소):
+//  0~3 손에서 떠난 창이 붉은 꼬리를 끌며 날아감(창끝이 칸 x 47) · 4~5 맞은 자리에서 터지며 흩어짐(가운데가 칸 x 47)
+//  줄 0 원본(적) · 줄 1 보랏빛(추출 그림자). 다른 이펙트와 달리 던진 손에서 맞은 쪽까지 실제로 날아감
+const SPEAR_FX = {
+  src: 'assets/sprites/fx_spear.png', w: 70, h: 42, rows: { enemy: 0, extracted: 1 },
+  originX: 47, originY: 21,   // 칸 안에서 창끝(터질 땐 가운데) 위치
+  handReach: 30,   // 판정 위치에서 바라보는 쪽으로 손끝까지(px) = 던지는 프레임의 뻗은 손 (칸 x 67)
+  handLift: 13,    // 판정 위치에서 위로 손 높이(px) = 칸 y 29 (발끝 y 54는 판정 위치 아래 12px)
+  fly: 0.62,       // 재생 시간 중 날아가는 비율 (나머지는 터지며 흩어짐)
+  glow: { enemy: 'rgba(255, 70, 80, 0.45)', extracted: 'rgba(160, 120, 255, 0.6)' },
+};
+function drawSpearFx(ctx, fx) {
+  const S = SPEAR_FX;
+  if (!S.img) return false;
+  const t = (fx.life - fx.ttl) / fx.life;
+  const dir = fx.facing || (fx.x2 >= fx.x1 ? 1 : -1);
+  const hx = fx.x1 + dir * S.handReach, hy = fx.y1 - S.handLift;
+  const tx = fx.x2, ty = fx.y2 - 8;   // 맞은 쪽 몸통 높이
+  const ang = Math.atan2(ty - hy, tx - hx);
+  const flying = t < S.fly;
+  const u = flying ? t / S.fly : 1;
+  const x = hx + (tx - hx) * u, y = hy + (ty - hy) * u;
+  const frame = flying ? Math.min(3, Math.floor(u * 4))
+    : 4 + Math.min(1, Math.floor((t - S.fly) / (1 - S.fly) * 2));
+  const row = S.rows[fx.kind] ?? 0;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.shadowColor = S.glow[fx.kind] || S.glow.enemy;
+  ctx.shadowBlur = 6;
+  ctx.translate(x, y);
+  ctx.rotate(ang);
+  if (Math.abs(ang) > Math.PI / 2) ctx.scale(1, -1);   // 왼쪽으로 날아갈 때 그림이 뒤집혀 보이지 않게
+  ctx.drawImage(S.img, frame * S.w, row * S.h, S.w, S.h, -S.originX, -S.originY, S.w, S.h);
+  ctx.restore();
+  return true;
+}
+// 3챕터 돌격형(붉은 오크 권투사) 주먹 장풍 (assets/sprites/fx_orcpunch.png, 58×40 도트 6프레임, 원본 7배 축소): 붉은 호가 솟구치며 흙먼지·돌 조각이 튐.
+// 줄 0 원본(적) · 줄 1 보랏빛(추출 그림자). 위아래 그대로, 그림 바닥을 발끝 높이에 맞춰 내지른 주먹 앞에서 시작해
+// 장풍처럼 바닥을 따라 앞으로 짧게 밀려 나감 (근접 공격이라 멀리 가지 않음, 판정은 그대로)
+const ORCPUNCH_FX = {
+  src: 'assets/sprites/fx_orcpunch.png', w: 58, h: 40, frames: 6,
+  rows: { enemy: 0, extracted: 1 },
+  glow: { enemy: 'rgba(255, 70, 80, 0.4)', extracted: 'rgba(160, 120, 255, 0.6)' },
+  bodyLift: 7,   // 그림 바닥(칸 y 39)이 발끝(판정 위치 +12)에 오도록
+  reach: 24,     // 바라보는 쪽으로 떨어진 거리(px) = 내지른 주먹 바로 앞에서 시작
+  travel: 28,    // 재생하는 동안 앞으로 밀려 나가는 거리(px)
+  upright: true, // 위아래 반전 안 함
+};
+// 3챕터 중장갑형(도끼 오크) 내려찍기 (assets/sprites/fx_axeslam.png, 70×56 도트 5프레임, 원본 6배 축소): 공중의 붉은 호가 바닥에 내리꽂혀 불꽃·돌 조각이 튀고 흙먼지가 남음.
+// 받은 그림의 흰 안개는 지우고 씀. 줄 0 원본(적) · 줄 1 보랏빛(추출 그림자). 위아래 그대로, 그림 바닥을 발끝 높이에 맞춰 도끼가 박히는 곳에 그림
+const AXESLAM_FX = {
+  src: 'assets/sprites/fx_axeslam.png', w: 70, h: 56, frames: 5,
+  rows: { enemy: 0, extracted: 1 },
+  glow: { enemy: 'rgba(255, 70, 60, 0.4)', extracted: 'rgba(160, 120, 255, 0.6)' },
+  bodyLift: 15,  // 그림 바닥(칸 y 55)이 발끝(판정 위치 +12)에 오도록
+  reach: 28,     // 바라보는 쪽으로 떨어진 거리(px) = 도끼날이 바닥에 박히는 곳
+  upright: true, // 위아래 반전 안 함
+};
+const ATTACK_FX = { axeslam: AXESLAM_FX, orcpunch: ORCPUNCH_FX, orcslash: ORCSLASH_FX, icewave: ICEWAVE_FX, iceclaw: ICECLAW_FX, claw: CLAW_FX, slash: SLASH_FX, ice: ICE_FX, bearclaw: BEARCLAW_FX, slam: SLAM_FX, bite: BITE_FX, berclaw: BERCLAW_FX, centclaw: CENTCLAW_FX };
 
 // 잔영 (assets/sprites/remnant.png): 보랏빛 그림자 불꽃 6프레임 반복. 파일이 없으면 기존 원형으로 그림
 //  - 바닥 웅덩이를 쓰러진 적의 발밑에 맞춤. 클릭 판정(잔영 위치 반경 16px)은 그대로
@@ -2735,7 +2867,7 @@ function drawCoreSprite(ctx, core, state, C) {
 const CORE_HP_LOW = 50;   // 거점 HP가 이 값 이하면 숫자를 붉게
 
 function loadFxSheets() {
-  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, SLAM_FX, BITE_FX, BERCLAW_FX, CENTCLAW_FX, ICECLAW_FX, ICEWAVE_FX, BREATH_FX, ORB_FX, REMNANT_FX, DEMON_WINDOWS, ANT_GLOW, ...Object.values(CORE_SPRITES)]) {
+  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, SLAM_FX, BITE_FX, BERCLAW_FX, CENTCLAW_FX, ICECLAW_FX, ICEWAVE_FX, ORCSLASH_FX, SPEAR_FX, ORCPUNCH_FX, AXESLAM_FX, BREATH_FX, ORB_FX, REMNANT_FX, DEMON_WINDOWS, ANT_GLOW, ...Object.values(CORE_SPRITES)]) {
     const img = new Image();
     img.onload = () => { fx.img = fx.shade ? buildTintedSheet(img, fx.shade) : img; };
     img.onerror = () => console.warn(`[이펙트 불러오기 실패] ${fx.src}`);
@@ -2812,6 +2944,7 @@ function drawAttackFx(ctx, fx) {
   if (S.reach) {   // 공격한 유닛이 바라보는 쪽 바로 앞에 표시 (적 위치를 따라가지 않음)
     ex = fx.x1 + dir * S.reach;
     ey = fx.y1;
+    if (S.travel) ex += dir * S.travel * (1 - (1 - p) * (1 - p));   // 장풍처럼 앞으로 밀려 나감 (처음 빠르고 점점 느려짐)
   }
   const x = Math.round(ex * k) / k;
   const y = Math.round((ey - S.bodyLift) * k) / k;
@@ -3108,6 +3241,10 @@ function render(ctx, state, view) {
   // 공격 선 / 할퀴기 자국
   for (const fx of state.effects) {
     if (PROC_FX[fx.style]) { PROC_FX[fx.style](ctx, fx); continue; }   // 그림 없이 코드로 그리는 탄환·폭발
+    if (fx.style === 'spear') {    // 오크 창병 투창 (그림이 없으면 탄환으로 대신)
+      if (drawSpearFx(ctx, fx)) continue;
+      PROC_FX.bolt(ctx, fx); continue;
+    }
     if (fx.style === 'orb') {      // 어금니 마력구 (그림이 없으면 탄환으로 대신)
       if (drawOrbFx(ctx, fx, state)) continue;
       PROC_FX.bolt(ctx, fx); continue;
