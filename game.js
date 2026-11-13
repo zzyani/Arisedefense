@@ -292,7 +292,7 @@ function checkPlacement(state, x, y) {
   const P = F.placement;
   if (x < P.edgeClear || x > F.width - P.edgeClear || y < P.edgeClear || y > F.height - P.edgeClear) return 'PLACE_EDGE';
   if (dist(x, y, F.core.x, F.core.y) <= P.coreClear) return 'PLACE_CORE';
-  if (F.spawnPoints.some((sp) => dist(x, y, sp.x, sp.y) <= P.spawnClear)) return 'PLACE_SPAWN';
+  if (F.spawnPoints.some((sp, i) => { const p = spawnPointFor(state.chapterId, i); return dist(x, y, p.x, p.y) <= P.spawnClear; })) return 'PLACE_SPAWN';
   if (state.basicUnits.some((u) => u.alive && dist(x, y, u.x, u.y) <= P.basicSpacing)) return 'PLACE_OVERLAP';
   return null;
 }
@@ -540,9 +540,19 @@ function makeExtractedUnit(state, data, x, y) {
 
 /* ---------- 적 ---------- */
 
+// 챕터별 출현 지점: 기본 출현 지점에 챕터 배경의 출입구에 맞춘 값(theme.spawn[id] = { y, revealTop })을 덮어씀
+//  - revealTop: 이 y보다 위는 그리지 않음 (문·벽·굴 아래에서 걸어 나오는 것처럼). null이면 가리지 않음
+function spawnPointFor(chapterId, i) {
+  const sp = GAME_DATA.field.spawnPoints[i];
+  if (!sp) return null;
+  const ch = getChapter(chapterId);
+  const o = ch && ch.theme && ch.theme.spawn && ch.theme.spawn[sp.id];
+  return o ? Object.assign({}, sp, o) : sp;
+}
+
 function createEnemy(state, enemyId, spawnIndex) {
   const d = findEnemyData(enemyId);
-  const sp = GAME_DATA.field.spawnPoints[spawnIndex];
+  const sp = spawnPointFor(state.chapterId, spawnIndex);
   return {
     uid: state.nextUid++,
     typeId: d.id,
@@ -1247,6 +1257,14 @@ function validateGameData(data) {
 
   if (!data.chapters || !data.chapters.length) errors.push('chapters: 챕터가 없습니다.');
   const chapterIds = new Set();
+  for (const ch of data.chapters || []) {   // 챕터별 출현 지점 덮어쓰기: 있는 출현 지점 id만, y는 전장 안
+    const ov = ch.theme && ch.theme.spawn;
+    if (!ov) continue;
+    for (const [id, o] of Object.entries(ov)) {
+      if (!F.spawnPoints.some((sp) => sp.id === id)) errors.push(`chapters ${ch.chapterId}: theme.spawn의 ${id} 출현 지점이 없습니다.`);
+      if (o.y !== undefined && !(o.y >= 0 && o.y <= F.height)) errors.push(`chapters ${ch.chapterId}: theme.spawn.${id}.y가 전장 밖입니다.`);
+    }
+  }
   (data.chapters || []).forEach((ch, ci) => {
     const at = `chapters[${ci}]`;
     if (!Number.isInteger(ch.chapterId) || ch.chapterId < 1) errors.push(`${at}: chapterId는 1 이상의 정수여야 합니다.`);
@@ -1535,9 +1553,9 @@ function spriteTopY(cfg, y, scaleMul) {
   return spriteGroundY(y) - (ref.groundY - cfg.bodyTop) * cfg.scale * scaleMul;
 }
 
-function spawnClipTop(spawn) {
-  const sp = GAME_DATA.field.spawnPoints[spawn];
-  return sp && sp.revealTop !== undefined ? sp.revealTop : null;
+function spawnClipTop(spawn, chapterId) {
+  const sp = spawnPointFor(chapterId, spawn);
+  return sp && sp.revealTop !== undefined && sp.revealTop !== null ? sp.revealTop : null;
 }
 
 function withClip(ctx, clipTop, draw) {
@@ -2919,7 +2937,7 @@ function render(ctx, state, view) {
     const anim = cfg.anims.death;
     const frame = Math.min(anim.frames - 1, Math.floor(t * anim.fps));
     const fade = t < 0.6 ? 1 : Math.max(0, 1 - (t - 0.6) / (CORPSE_TIME - 0.6));
-    const clipTop = c.extracted ? null : spawnClipTop(c.spawn);
+    const clipTop = c.extracted ? null : spawnClipTop(c.spawn, state.chapterId);
     const scaleMul = c.extracted ? EXTRACTED_SPRITE_SCALE : 1;
     withClip(ctx, clipTop, () => {
       drawGroundShadow(ctx, cfg, 'death', frame, c.x, c.y, fade, scaleMul, c.extracted ? GROUND_SHADOW_EXTRACTED : GROUND_SHADOW);
@@ -2975,7 +2993,7 @@ function render(ctx, state, view) {
   // 적
   for (const e of state.enemies) {
     const d = findEnemyData(e.typeId);
-    const clipTop = spawnClipTop(e.spawn);   // 출현 연출: 지정한 선 위쪽은 가려서 벽 아래에서 나오는 것처럼
+    const clipTop = spawnClipTop(e.spawn, state.chapterId);   // 출현 연출: 지정한 선 위쪽은 가려서 문·벽·굴 아래에서 나오는 것처럼
     const cfg = spriteFor(e.typeId, state.chapterId);
     if (cfg) {   // 스프라이트: 이동·공격·피격 애니메이션
       const pick = pickAnim(e, state.elapsed, e.moving, cfg, !e.moving);
