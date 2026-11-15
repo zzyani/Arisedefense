@@ -87,32 +87,50 @@ const GAME_DATA = {
     { id: 'EN_006', name: '스피드형', maxHp: 55,  attack: 8,  moveSpeed: 100, attackInterval: 0.8, attackRange: 40, radius: 11, color: '#7fdc5a' },   // 챕터 5부터
   ],
 
-  // 보스: 챕터 마지막 웨이브(5웨이브)의 일반 적을 모두 처치하면 bossDelay초 뒤 북쪽에서 등장.
-  //  이동·공격·거점 공격은 일반 적과 같고, 아래 두 패턴이 더해짐 (모든 보스 공통 틀, 수치만 보스마다 다름)
+  // 보스: 챕터 마지막 웨이브(5웨이브)의 일반 적을 모두 처치하면 보스전 준비 단계 → 시작하면 bossDelay초 뒤 spawn 출입구에서 등장.
+  //  이동·공격·거점 공격은 일반 적과 같고, 아래 패턴이 더해짐
   //  summons: HP가 at(비율) 이하가 되면 보스 주변에 부하를 한 번 불러냄 (부하는 일반 적과 같은 보상·잔영)
-  //  slam: 예고 광역 공격. first초 뒤 첫 발동, warn초 동안 바닥에 원을 예고(그동안 보스 정지) → 반경 radius 안의 모든 그림자에게 damage(피할 수 없음)
+  //  slam: 예고 광역 공격(모든 보스 공통). first초 뒤 첫 발동, warn초 동안 바닥에 타원을 예고(그동안 보스 정지) → 타원(반경 radius) 안의 모든 그림자에게 damage
   //        → recover초 쉼. 재사용은 발동 순간부터 cooldown초, HP가 enrageAt 이하면 enragedCooldown초 (분노)
+  //  skill: 보스 고유 기술. slam과 겹치지 않고 하나씩만 씀(끝나면 서로 최소 2초 간격). first초 뒤 첫 사용, 재사용은 발동 순간부터 cooldown초
+  //         warn초 예고(보스 정지) → 발동 → recover초 쉼. 대상이 없으면 2초 뒤 다시 시도
+  //    poison    독액 뱉기: range 안에서 그림자가 가장 많이 모인 곳에 독 웅덩이(반경 radius)를 duration초. 안의 그림자는 0.5초마다 dps/2 피해
+  //    ambush    은신 기습: 반투명해져 공격받지 않음, HP가 가장 낮은 그림자에 표식 → 그 뒤로 순간이동해 damage (예고 중 대상이 사라지면 취소)
+  //    frenzy    광란의 주술: 화면의 모든 적·보스가 duration초 동안 공격·이동 속도 haste배. 부하 소환 afterSummon초 뒤에도 씀
+  //    lightning 낙뢰: 그림자 count기(분노 시 enragedCount기) 자리에 표식 → 표식 반경 radius 안 그림자에게 damage (표식은 그 자리에 고정)
+  //    dash      돌진: 거점 쪽(거점에 붙어 있으면 가장 가까운 그림자 쪽) 직선 length·폭 width 예고 → speed로 돌진하며 선 위 그림자에게 damage
+  //    beam      눈 광선: 거점 쪽 부채꼴(반경 range, 각도 arc 라디안) 예고 → sweep초 동안 광선이 왼쪽에서 오른쪽으로 훑으며 닿은 그림자에게 damage
+  //  devour: 보스가 그림자를 처치할 때마다 최대 HP의 이 비율만큼 회복 (개미왕 포식)
+  //  spawn: 등장 출입구 (field.spawnPoints의 id: N·E·S·W). 북·남은 거점과 가까워서 동·서쪽을 씀
+  //  5웨이브 일반 적을 모두 처치하면 보스전 준비 단계(배치 가능, 등장 방향 안내)로 넘어가고, 시작을 누르면 bossDelay초 뒤 등장
   //  처치 보상: 에너지 reward, 잔영 없음(추출 불가). 그림은 지금은 그 챕터 중장갑형 그림을 1.5배·색을 바꿔 임시로 씀 (game.js BOSS_LOOK)
   bossDelay: 2,
   bosses: [
-    { id: 'BOSS_1', chapterId: 1, name: '카사카',   maxHp: 2600,  attack: 13, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#3fae6a', reward: 50,
+    { id: 'BOSS_1', chapterId: 1, spawn: 'W', name: '카사카',   maxHp: 2600,  attack: 13, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#3fae6a', reward: 50,
       summons: [{ at: 0.7, enemies: ['EN_001', 'EN_001', 'EN_002'] }, { at: 0.4, enemies: ['EN_001', 'EN_001', 'EN_003'] }],
-      slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 22, cooldown: 10, enragedCooldown: 7, enrageAt: 0.4 } },
-    { id: 'BOSS_2', chapterId: 2, name: '바루카',   maxHp: 3400,  attack: 15, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#8fd8ff', reward: 50,
+      slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 22, cooldown: 13, enragedCooldown: 9, enrageAt: 0.4 },
+      skill: { type: 'poison', name: '독액 뱉기', first: 5, cooldown: 12, warn: 1.2, recover: 0.4, range: 320, radius: 55, duration: 4, dps: 10 } },
+    { id: 'BOSS_2', chapterId: 2, spawn: 'E', name: '바루카',   maxHp: 3400,  attack: 15, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#8fd8ff', reward: 50,
       summons: [{ at: 0.7, enemies: ['EN_001', 'EN_001', 'EN_002'] }, { at: 0.4, enemies: ['EN_001', 'EN_001', 'EN_003'] }],
-      slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 25, cooldown: 10, enragedCooldown: 7, enrageAt: 0.4 } },
-    { id: 'BOSS_3', chapterId: 3, name: '카르갈간', maxHp: 4400,  attack: 17, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#7fae3a', reward: 50,
+      slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 25, cooldown: 13, enragedCooldown: 9, enrageAt: 0.4 },
+      skill: { type: 'ambush', name: '은신 기습', first: 6, cooldown: 11, warn: 1.0, recover: 0.5, damage: 55 } },
+    { id: 'BOSS_3', chapterId: 3, spawn: 'W', name: '카르갈간', maxHp: 4400,  attack: 17, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#7fae3a', reward: 50,
       summons: [{ at: 0.7, enemies: ['EN_001', 'EN_001', 'EN_002'] }, { at: 0.4, enemies: ['EN_001', 'EN_004', 'EN_003'] }],
-      slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 28, cooldown: 10, enragedCooldown: 7, enrageAt: 0.4 } },
-    { id: 'BOSS_4', chapterId: 4, name: '바란',     maxHp: 5400,  attack: 19, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#ff4a3a', reward: 50,
+      slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 28, cooldown: 13, enragedCooldown: 9, enrageAt: 0.4 },
+      skill: { type: 'frenzy', name: '광란의 주술', first: 7, cooldown: 14, warn: 0.8, recover: 0.3, duration: 6, haste: 1.4, afterSummon: 1 } },
+    { id: 'BOSS_4', chapterId: 4, spawn: 'E', name: '바란',     maxHp: 5400,  attack: 19, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#ff4a3a', reward: 50,
       summons: [{ at: 0.7, enemies: ['EN_001', 'EN_002', 'EN_004'] }, { at: 0.4, enemies: ['EN_001', 'EN_005', 'EN_003'] }],
-      slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 32, cooldown: 10, enragedCooldown: 7, enrageAt: 0.4 } },
-    { id: 'BOSS_5', chapterId: 5, name: '개미왕',   maxHp: 6400,  attack: 21, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#c8304a', reward: 50,
+      slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 32, cooldown: 13, enragedCooldown: 9, enrageAt: 0.4 },
+      skill: { type: 'lightning', name: '낙뢰', first: 5, cooldown: 11, warn: 1.2, recover: 0.3, count: 3, enragedCount: 4, radius: 28, damage: 24 } },
+    { id: 'BOSS_5', chapterId: 5, spawn: 'W', name: '개미왕',   maxHp: 6400,  attack: 21, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#c8304a', reward: 50,
       summons: [{ at: 0.7, enemies: ['EN_001', 'EN_006', 'EN_002'] }, { at: 0.4, enemies: ['EN_006', 'EN_005', 'EN_003'] }],
-      slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 36, cooldown: 10, enragedCooldown: 7, enrageAt: 0.4 } },
-    { id: 'BOSS_6', chapterId: 6, name: '신상',     maxHp: 8000, attack: 24, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#ffd166', reward: 50,
+      slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 36, cooldown: 13, enragedCooldown: 9, enrageAt: 0.4 },
+      skill: { type: 'dash', name: '돌진', first: 5, cooldown: 12, warn: 1.0, recover: 0.6, length: 160, width: 40, speed: 520, damage: 30 },
+      devour: 0.02 },
+    { id: 'BOSS_6', chapterId: 6, spawn: 'E', name: '신상',     maxHp: 8000, attack: 24, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#ffd166', reward: 50,
       summons: [{ at: 0.7, enemies: ['EN_001', 'EN_002', 'EN_006'] }, { at: 0.4, enemies: ['EN_004', 'EN_005', 'EN_003'] }],
-      slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 42, cooldown: 10, enragedCooldown: 7, enrageAt: 0.4 } },
+      slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 42, cooldown: 13, enragedCooldown: 9, enrageAt: 0.4 },
+      skill: { type: 'beam', name: '눈 광선', first: 12, cooldown: 15, warn: 1.5, sweep: 1.0, recover: 0.4, range: 240, arc: 1.2, damage: 26 } },
   ],
 
   // 그림자 추출: 적 사망 위치에 잔영 생성 → 플레이어가 선택·에너지 지불 → 자동 추적형 그림자

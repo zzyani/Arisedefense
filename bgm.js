@@ -220,17 +220,52 @@ const Bgm = (() => {
       nz(t + 0.2, 1.8, 0.09, { f0: 400, f1: 1500, q: 0.8, attack: 0.9, rev: 0.6 });
     } },
     bossAttack: { p: 2, f(t) { nz(t, 0.16, 0.25, { f0: 700, f1: 1800, q: 1.5 }); tone(t, 'sine', 90, 45, 0.25, 0.08); fmBell(t + 0.03, 2800, 0.2, 0.03, 2.7, 3, 0.2); } },   // B02: 무거운 베기 + 얼음 깨지는 고역
-    bossWarn: { p: 0, f(t) {   // B03: 1.5초 동안 음높이가 올라가며 커지는 차지
-      const src = noise(t, t + 1.55), f = filt('bandpass', 300, 3), g = ctx.createGain();
-      f.frequency.setValueAtTime(300, t); f.frequency.exponentialRampToValueAtTime(3200, t + 1.5);
-      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.55, t + 1.45); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.53);
+    bossWarn: { p: 0, f(t, o) {   // B03: 예고 시간(o.dur, 기본 1.5초) 동안 음높이가 올라가며 커지는 차지
+      const D = o.dur || 1.5;
+      const src = noise(t, t + D + 0.05), f = filt('bandpass', 300, 3), g = ctx.createGain();
+      f.frequency.setValueAtTime(300, t); f.frequency.exponentialRampToValueAtTime(3200, t + D);
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.55, t + D - 0.05); g.gain.exponentialRampToValueAtTime(0.0001, t + D + 0.03);
       src.connect(f); f.connect(g); sfxDest(g, 0.3);
-      tone(t, 'sawtooth', 110, 440, 1.5, 0.04, { lp: 1200, attack: 1.3 });
+      tone(t, 'sawtooth', 110, 440, D, 0.04, { lp: 1200, attack: D * 0.87 });
     } },
     bossSlam: { p: 0, f(t) { tone(t, 'sine', 90, 30, 0.8, 0.4, { rev: 0.5 }); nz(t, 0.6, 0.14, { type: 'lowpass', f0: 2000, f1: 150, rev: 0.6 }); nz(t + 0.03, 0.4, 0.08, { type: 'highpass', f0: 5000, rev: 0.4 }); } },   // B04: 강한 저음 쿵 + 파편
     bossSummon: { p: 0, f(t) { padChord(t, [196, 294], 0.7, 0.07, { attack: 0.06, lp: 1600, rev: 0.6 }); padChord(t + 0.35, [220, 330], 0.6, 0.06, { attack: 0.05, lp: 1600, rev: 0.6 }); nz(t + 0.2, 0.25, 0.08, { f0: 700, q: 1.5, rev: 0.4 }); } },   // B05: 뿔피리 신호 + 균열
     bossEnrage: { p: 2, f(t) { tone(t, 'sawtooth', 70, 55, 0.9, 0.08, { lp: 400 }); padChord(t + 0.1, [233, 247, 349], 0.7, 0.05, { attack: 0.02, lp: 2000, rev: 0.5 }); } },   // B06: 으르렁 + 불협화음
     bossDie: { p: 1, f(t) { nz(t, 1.4, 0.18, { type: 'lowpass', f0: 3000, f1: 120, rev: 0.9 }); tone(t, 'sine', 80, 28, 1.5, 0.3, { rev: 0.8 }); for (let i = 0; i < 5; i++) fmBell(t + 0.1 + i * 0.12, 1800 + i * 300, 0.4, 0.03, 2.7, 3, 0.6); } },   // B07: 무너지는 소리 + 긴 잔향
+    // ---- 보스 고유 기술 ----
+    poisonSplash: { p: 0, f(t) {   // 카사카: 독 덩어리가 철퍽 터지고 지글지글 끓음
+      nz(t, 0.18, 0.3, { type: 'lowpass', f0: 1400, f1: 300, rev: 0.3 }); tone(t, 'sine', 160, 60, 0.2, 0.18);
+      nz(t + 0.08, 0.9, 0.06, { type: 'highpass', f0: 3500, attack: 0.15 });
+      for (let i = 0; i < 5; i++) blip(t + 0.12 + i * 0.11, 300 + i * 70, 700 + i * 90, 0.05, 0.05, 'sine');
+    } },
+    ambushVanish: { p: 0, f(t) {   // 바루카: 숨을 들이켜듯 사라짐 + 차가운 반짝임
+      nz(t, 0.5, 0.22, { f0: 3000, f1: 600, q: 1.2, attack: 0.05, rev: 0.4 });
+      shimmer(t + 0.05, 2637, 0.6, 0.05, 0.6); shimmer(t + 0.12, 3136, 0.5, 0.04, 0.6);
+    } },
+    ambushStrike: { p: 0, f(t) {   // 바루카: 등 뒤에서 날카롭게 두 번 베기 + 얼음 깨짐
+      nz(t, 0.09, 0.35, { type: 'highpass', f0: 2500 }); nz(t + 0.1, 0.09, 0.3, { type: 'highpass', f0: 3000 });
+      fmBell(t + 0.02, 3200, 0.3, 0.05, 2.7, 3, 0.3); tone(t, 'sine', 120, 50, 0.2, 0.12);
+    } },
+    frenzyRoar: { p: 0, f(t) {   // 카르갈간: 낮은 함성 + 전쟁 북 3타
+      tone(t, 'sawtooth', 95, 70, 0.9, 0.09, { lp: 700, attack: 0.08, rev: 0.4 }); tone(t, 'sawtooth', 142, 105, 0.9, 0.05, { lp: 900, attack: 0.08, rev: 0.4 });
+      for (let i = 0; i < 3; i++) { tone(t + i * 0.16, 'sine', 90, 40, 0.3, 0.3); nz(t + i * 0.16, 0.12, 0.12, { type: 'lowpass', f0: 900 }); }
+    } },
+    thunder: { p: 0, f(t) {   // 바란: 번개가 찢어지는 소리 + 낮게 우르릉
+      nz(t, 0.12, 0.25, { type: 'highpass', f0: 2000 }); nz(t + 0.13, 0.08, 0.16, { type: 'highpass', f0: 2500 });
+      nz(t + 0.03, 1.2, 0.2, { type: 'lowpass', f0: 600, f1: 90, rev: 0.6 }); tone(t, 'sine', 70, 35, 0.8, 0.25, { rev: 0.4 });
+    } },
+    dashRush: { p: 0, f(t) {   // 개미왕: 땅을 박차고 바람을 가르며 돌진
+      tone(t, 'sine', 110, 40, 0.25, 0.3); nz(t, 0.08, 0.2, { type: 'lowpass', f0: 1200 });
+      nz(t + 0.03, 0.45, 0.16, { f0: 500, f1: 2500, q: 0.9, attack: 0.05 });
+    } },
+    devour: { p: 1, f(t) {   // 개미왕 포식: 우적 씹고 꿀꺽 + 낮은 회복음
+      nz(t, 0.06, 0.25, { f0: 1800, q: 2 }); nz(t + 0.09, 0.06, 0.22, { f0: 1500, q: 2 });
+      tone(t + 0.2, 'sine', 220, 110, 0.18, 0.12); shimmer(t + 0.3, 330, 0.5, 0.04, 0.4);
+    } },
+    beamFire: { p: 0, f(t) {   // 신상 눈 광선: 1초 동안 지지직 끓는 빛줄기
+      tone(t, 'sawtooth', 220, 180, 1.05, 0.07, { lp: 2400, attack: 0.03, rev: 0.4 }); tone(t, 'square', 331, 300, 1.05, 0.04, { lp: 3000, attack: 0.03 });
+      nz(t, 1.05, 0.13, { f0: 2500, q: 0.8, attack: 0.03, rev: 0.3 }); fmBell(t, 1760, 0.6, 0.06, 1.5, 2, 0.6);
+    } },
     coreDanger: { p: 0, f(t) { for (let i = 0; i < 2; i++) { blip(t + i * 0.42, 988, 988, 0.18, 0.14); blip(t + i * 0.42 + 0.2, 740, 740, 0.18, 0.14); } } },   // C02 (높은 음-낮은 음 2회)
   };
   // 확인용: 효과음 하나를 소리 없이 렌더해 AudioBuffer로 돌려줌 (음량 맞추기용)

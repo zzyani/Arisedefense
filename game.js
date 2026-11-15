@@ -35,7 +35,7 @@ const STATUS = Object.freeze({
 const TRANSITIONS = Object.freeze({
   READY:       ['PREPARATION'],
   PREPARATION: ['PLAYING', 'READY'],
-  PLAYING:     ['PAUSED', 'WAVE_CLEAR', 'VICTORY', 'DEFEAT'],
+  PLAYING:     ['PAUSED', 'WAVE_CLEAR', 'VICTORY', 'DEFEAT', 'PREPARATION'],   // → PREPARATION: 5웨이브 일반 적을 다 잡으면 보스전 준비
   PAUSED:      ['PLAYING', 'READY'],
   WAVE_CLEAR:  ['PREPARATION', 'READY'],
   VICTORY:     ['READY'],
@@ -106,7 +106,9 @@ function createInitialState(chapterId = GAME_DATA.chapters[0].chapterId, availab
     pendingHits: [],          // 늦게 들어가는 피해 (어금니 마력구처럼 날아가 닿을 때): { uid, dmg, at }
     corpses: [],              // 사망 애니메이션 표시 (연출용)
     events: [],               // 규칙 → UI 알림 (예: 선택한 잔영 만료). UI가 매 프레임 비움
-    boss: null,               // 보스전 진행: { phase: 'waiting'|'active'|'dead', timer, uid, done(소환한 구간), skillTimer, warn, recover, enraged }
+    bossPrep: false,          // 보스전 준비 단계 (5웨이브 일반 적을 다 잡은 뒤, 보스 등장 전 배치)
+    bossReady: false,         // 보스전 준비를 마치고 시작함 → 보스 등장
+    boss: null,               // 보스전 진행: { phase: 'waiting'|'active'|'dead', timer, uid, done(소환한 구간), slamTimer, skillTimer, cast(지금 쓰는 기술), enraged, zones(독 웅덩이), frenzy(광란 남은 초) }
     spawnIndex: 0,
     spawnTimer: 0,
     nextUid: 1,               // 전장 객체 고유 ID (종류 ID와 별개)
@@ -586,16 +588,16 @@ function createEnemy(state, enemyId, spawnIndex) {
 // 기본 그림자: 사거리 내 적 중 거점에 가장 가까운 적 → 동률이면 먼저 생성된 적
 function findBasicTargets(state, unit) {
   const core = GAME_DATA.field.core;
-  const inRange = state.enemies.filter((e) => e.alive && dist(e.x, e.y, unit.x, unit.y) <= unit.attackRange);
+  const inRange = state.enemies.filter((e) => targetable(e) && dist(e.x, e.y, unit.x, unit.y) <= unit.attackRange);
   if (inRange.length === 0) return [];
   inRange.sort((a, b) => (dist(a.x, a.y, core.x, core.y) - dist(b.x, b.y, core.x, core.y)) || (a.uid - b.uid));
   if (unit.targetType === 'all_in_range') return inRange;
   const main = inRange[0];
   if (unit.targetType === 'splash') {   // 첫 대상 + 그 주변 splashRadius 안의 적 (사거리 밖이어도 폭발에 휘말림)
-    return [main].concat(state.enemies.filter((e) => e.alive && e !== main && dist(e.x, e.y, main.x, main.y) <= unit.splashRadius));
+    return [main].concat(state.enemies.filter((e) => targetable(e) && e !== main && dist(e.x, e.y, main.x, main.y) <= unit.splashRadius));
   }
   if (unit.targetType === 'line') {     // 카이셀 브레스: 첫 대상 쪽으로 뻗는 줄기(길이 lineLength·폭 lineWidth)에 걸린 적 전부 (뒤쪽 적 포함)
-    return [main].concat(state.enemies.filter((e) => e.alive && e !== main && inLine(unit, main, e, unit.lineLength, unit.lineWidth, unit.lineMaxTilt)));
+    return [main].concat(state.enemies.filter((e) => targetable(e) && e !== main && inLine(unit, main, e, unit.lineLength, unit.lineWidth, unit.lineMaxTilt)));
   }
   return [main];
 }
@@ -638,7 +640,7 @@ function findEnemyTarget(state, enemy) {
 //  - 그림자 기준 탐색 반경 안
 //  - 적이 이동 제한 범위(원점 기준 maxRoamRadius) + 공격 사거리 안 → 범위 밖으로 나가면 추격 중단
 function canChase(shadow, enemy) {
-  if (!enemy || !enemy.alive) return false;
+  if (!enemy || !targetable(enemy)) return false;   // 은신한 보스는 쫓지 않음
   if (dist(shadow.x, shadow.y, enemy.x, enemy.y) > shadow.detectionRadius) return false;
   return dist(shadow.originX, shadow.originY, enemy.x, enemy.y) <= shadow.maxRoamRadius + shadow.attackRange;
 }
@@ -663,6 +665,12 @@ function findChaseTarget(state, shadow) {
 function startWave(state) {
   if (state.status !== STATUS.PREPARATION) return false;
   if (!getWaveData(state, state.wave)) return false;
+  if (state.bossPrep) {   // 보스전 시작: 일반 적은 이미 다 나왔으니 보스만 (bossDelay초 뒤 등장)
+    state.bossPrep = false;
+    state.bossReady = true;
+    for (const u of state.basicUnits) u.recallable = false;
+    return setStatus(state, STATUS.PLAYING);
+  }
   if (state.wave >= 2) addEnergy(state, GAME_DATA.config.waveStartBonus);
   for (const u of state.basicUnits) u.recallable = false;   // 전투에 들어간 그림자는 회수 잠금
   state.spawnIndex = 0;
@@ -685,6 +693,7 @@ function goToNextWave(state) {
  *  save.cleared[챕터] = { best: { coreHp, kills, extractions } }   클리어한 챕터와 최고 기록(남은 거점 HP 기준)
  *  save.resume[챕터]  = run                                          웨이브를 클리어한 순간의 진행 상황
  *  run: 다음 웨이브 번호·에너지·거점 HP·통계·살아 있는 그림자 → 다음 웨이브 배치 준비부터 이어함
+ *       bossPrep: true면 마지막 웨이브의 보스전 준비 단계에서 저장한 것 → 보스전 준비부터 이어함
  *  - 앞 챕터를 클리어해야 다음 챕터가 해금됨
  *  - 패배하거나 챕터를 클리어하면 그 챕터의 이어하기는 지워짐 (도중에 나가면 마지막 클리어 웨이브부터) */
 const SAVE_VERSION = 1;
@@ -731,11 +740,12 @@ function getNextChapter(chapterId) {
   return i >= 0 ? GAME_DATA.chapters[i + 1] || null : null;
 }
 
-// 웨이브 클리어(WAVE_CLEAR) 순간의 진행 상황. 추출 그림자는 원점(대기 위치)에 둠
+// 웨이브 클리어(WAVE_CLEAR)나 보스전 준비 단계에 들어간 순간의 진행 상황. 추출 그림자는 원점(대기 위치)에 둠
 function serializeRun(state) {
   return {
     chapterId: state.chapterId,
-    wave: state.wave + 1,
+    wave: state.bossPrep ? state.wave : state.wave + 1,   // 보스전 준비 중이면 그 웨이브의 보스전부터
+    bossPrep: state.bossPrep || undefined,
     energy: state.energy,
     coreHp: state.coreHp,
     stats: Object.assign({}, state.stats, { waveKills: 0 }),
@@ -757,6 +767,10 @@ function restoreRun(run, availableShadowIds) {
   state.coreHp = Math.max(1, Math.min(C.coreHp, Math.round(run.coreHp)));
   for (const k of Object.keys(state.stats)) if (isNum(run.stats[k])) state.stats[k] = run.stats[k];
   state.stats.waveKills = 0;
+  if (run.bossPrep && state.wave === getWaveCount(state) && findBossData(state.chapterId)) {   // 보스전 준비부터: 일반 적은 이미 처치함
+    state.bossPrep = true;
+    state.spawnIndex = getWaveData(state, state.wave).enemies.length;
+  }
   setStatus(state, STATUS.PREPARATION);
   for (const b of run.basic) {
     const d = findShadowData(b.typeId);
@@ -821,7 +835,8 @@ function updateGame(state, dt) {
   state.elapsed += dt;
 
   updateSpawning(state, dt);              // 1. 적 생성
-  updateBoss(state, dt);                  //    보스: 등장 · HP 구간 소환 · 예고 광역 공격
+  updateBoss(state, dt);                  //    보스: 준비 단계 · 등장 · HP 구간 소환 · 기술
+  if (state.status !== STATUS.PLAYING) return;   // 보스전 준비 단계로 넘어감
   updateRemnants(state, dt);              // 2. 잔영 시간 갱신
   updateEnemyMovement(state, dt);         // 3. 적 이동 / 거점 도달 (도달하면 멈춰서 거점 공격)
   updateExtractedAI(state, dt);           // 4. 추출 그림자 탐색 / 추격 / 복귀
@@ -841,7 +856,7 @@ function updateGame(state, dt) {
     state.stats.waveKills += 1;
     if (enemy.isBoss) {                   //    보스: 에너지만 많이, 잔영 없음(추출 불가)
       addEnergy(state, findEnemyData(enemy.typeId).reward || 0);
-      if (state.boss) { state.boss.phase = 'dead'; state.boss.warn = state.boss.recover = 0; }
+      if (state.boss) Object.assign(state.boss, { phase: 'dead', cast: null, zones: [], frenzy: 0 });   // 남은 독 웅덩이·광란도 끝
       state.events.push('BOSS_KILL');
     } else {
       addEnergy(state, GAME_DATA.config.killReward);
@@ -879,18 +894,19 @@ function updateRemnants(state, dt) {
 
 function updateEnemyMovement(state, dt) {
   const core = GAME_DATA.field.core;
+  const haste = enemyHaste(state);   // 광란의 주술: 적 이동 속도 증가
   for (const e of state.enemies) {
     if (!e.alive) continue;
-    if (e.casting) { e.moving = false; continue; }   // 보스 광역 공격 예고·후딜레이: 제자리
+    if (e.casting) { e.moving = e.dashing; continue; }   // 보스 기술 예고·후딜레이: 제자리 (돌진은 updateBoss가 움직임)
     // 사거리 안에 그림자가 있거나 거점에 붙었으면 멈춤 (원거리형은 쏘면서 거점 둘레까지 계속 이동)
     e.moving = !e.atCore && (e.moveWhileAttacking || !findEnemyTarget(state, e));
     if (!e.moving) continue;
     if (e.coreSlot !== null) {        // 거점 둘레를 따라 자기 자리로 이동 중
-      moveToCoreSlot(e, core, e.moveSpeed * dt);
+      moveToCoreSlot(e, core, e.moveSpeed * haste * dt);
       continue;
     }
     faceToward(e, core.x);
-    moveToward(e, core.x, core.y, e.moveSpeed * dt, 0);
+    moveToward(e, core.x, core.y, e.moveSpeed * haste * dt, 0);
     if (dist(e.x, e.y, core.x, core.y) <= coreRingRadius(e, core)) {
       // 사라지지 않고 거점 둘레의 빈자리를 잡아 멈춰서 공격 (processEnemyAttacks)
       e.coreSlot = pickCoreSlot(state, e, core);
@@ -1028,7 +1044,8 @@ function clampToRoam(s) {
 
 function updateCooldowns(state, dt) {
   for (const u of getAllShadows(state)) if (u.alive) u.cooldown = Math.max(0, u.cooldown - dt);
-  for (const e of state.enemies) if (e.alive) e.cooldown = Math.max(0, e.cooldown - dt);
+  const haste = enemyHaste(state);   // 광란의 주술: 적 공격 속도 증가
+  for (const e of state.enemies) if (e.alive) e.cooldown = Math.max(0, e.cooldown - dt * haste);
 }
 
 function processShadowAttacks(state) {
@@ -1081,10 +1098,10 @@ function processShadowAttacks(state) {
   for (const s of state.extractedUnits) {
     if (!s.alive || s.aiState !== AI.ATTACK || s.cooldown > 0) continue;
     const t = state.enemies.find((e) => e.uid === s.targetId);
-    if (!t || !t.alive || dist(s.x, s.y, t.x, t.y) > s.attackRange) continue;
+    if (!t || !targetable(t) || dist(s.x, s.y, t.x, t.y) > s.attackRange) continue;
     // 광역형의 그림자: 사거리 안 적 전부, 그 밖에는 추격 대상 하나
     const hits = s.targetType === 'all_in_range'
-      ? state.enemies.filter((e) => e.alive && dist(s.x, s.y, e.x, e.y) <= s.attackRange)
+      ? state.enemies.filter((e) => targetable(e) && dist(s.x, s.y, e.x, e.y) <= s.attackRange)
       : [t];
     const dmg = calcDamage(s.attack);
     for (const e of hits) {
@@ -1107,11 +1124,77 @@ function processShadowAttacks(state) {
 // 챕터 마지막 웨이브에 보스가 있으면 보스 웨이브
 function isBossWave(state) { return state.wave === getWaveCount(state) && !!findBossData(state.chapterId); }
 
+// 보스 출입구 번호 (data의 spawn: 'N'·'E'·'S'·'W', 없으면 북쪽)
+function bossSpawnIndex(d) { return Math.max(0, GAME_DATA.field.spawnPoints.findIndex((sp) => sp.id === (d.spawn || 'N'))); }
+
+// 보스전 준비 단계로: 웨이브 사이처럼 배치할 수 있고, 시작을 누르면 보스가 나옴 (잔영은 남겨 둬서 추출 가능)
+function enterBossPrep(state) {
+  for (const u of state.basicUnits) {   // 돌격하는 그림자는 배치한 자리로
+    if (u.mobile) { u.x = u.originX; u.y = u.originY; u.targetId = null; u.moving = false; }
+  }
+  state.effects = []; state.corpses = []; state.pendingHits = [];
+  state.bossPrep = true;
+  setStatus(state, STATUS.PREPARATION);
+  state.events.push('BOSS_PREP');
+}
+
 function createBoss(state, d) {
-  const e = createEnemy(state, d.id, 0);   // 북쪽 출현 지점 (출현 연출도 같음)
+  const e = createEnemy(state, d.id, bossSpawnIndex(d));   // 보스 출입구 (동·서쪽)
   e.isBoss = true;
   e.casting = false;   // 광역 공격 예고·후딜레이 중이면 true (이동·기본 공격 정지)
   return e;
+}
+
+const BOSS_SKILL_GAP = 2;      // 기술 하나가 끝나면 다른 기술까지 최소 간격(초)
+const BOSS_RETRY = 2;          // 기술 대상이 없으면 이만큼 뒤 다시 시도(초)
+const GROUND_FLAT = 0.55;      // 바닥 원을 위에서 비스듬히 본 납작함 (예고 그림과 판정이 같도록)
+
+// 바닥 타원(가로 반경 R, 세로 R × GROUND_FLAT) 안에 있는가
+function inGroundEllipse(px, py, cx, cy, R) {
+  const dx = (px - cx) / R, dy = (py - cy) / (R * GROUND_FLAT);
+  return dx * dx + dy * dy <= 1;
+}
+// 점 (px, py)에서 선분 (ax, ay)-(bx, by)까지 거리
+function distToSegment(px, py, ax, ay, bx, by) {
+  const vx = bx - ax, vy = by - ay, L = vx * vx + vy * vy;
+  const t = L ? Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / L)) : 0;
+  return dist(px, py, ax + vx * t, ay + vy * t);
+}
+// 공격받을 수 있는 적인가 (은신한 보스는 그림자가 노리지 않음)
+function targetable(e) { return e.alive && !e.stealth; }
+// 광란의 주술 중이면 적의 공격·이동 속도 배율
+function enemyHaste(state) {
+  const B = state.boss;
+  if (!B || !(B.frenzy > 0)) return 1;
+  const d = findBossData(state.chapterId);
+  return (d && d.skill && d.skill.haste) || 1;
+}
+// 보스가 그림자에게 피해. 처치하면 사망 연출 + (개미왕) 포식 회복
+function bossHitShadow(state, boss, s, dmg) {
+  const died = applyDamage(s, calcDamage(dmg));
+  s.hitAt = state.elapsed;
+  if (died) { addCorpse(state, s); state.events.push('SHADOW_DIED'); bossDevour(state, boss, s); }
+  return died;
+}
+function bossDevour(state, e, s) {
+  const d = e && e.isBoss ? findEnemyData(e.typeId) : null;
+  if (!d || !d.devour || !e.alive) return;
+  const heal = Math.round(e.maxHp * d.devour);
+  e.hp = Math.min(e.maxHp, e.hp + heal);
+  const fx = addEffect(state, s.x, s.y, e.x, e.y, 'enemy', 'devour');
+  fx.amount = heal; fx.color = d.color;
+  state.events.push('BOSS_DEVOUR');
+}
+// 보스를 거점 둘레 밖으로 (순간이동·돌진 뒤). 거점 자리는 다시 잡음
+function releaseBossFromCore(e) {
+  const core = GAME_DATA.field.core, R = coreRingRadius(e, core);
+  const d = dist(e.x, e.y, core.x, core.y);
+  if (d < R) {
+    const ux = d ? (e.x - core.x) / d : 0, uy = d ? (e.y - core.y) / d : -1;
+    e.x = core.x + ux * R; e.y = core.y + uy * R;
+  }
+  clampToField(e);
+  e.atCore = false; e.coreSlot = null;
 }
 
 function updateBoss(state, dt) {
@@ -1121,15 +1204,16 @@ function updateBoss(state, dt) {
   // 1. 일반 적을 모두 처치하면 bossDelay초 뒤 등장
   if (!B) {
     if (state.spawnIndex < wave.enemies.length || state.enemies.length > 0) return;
-    B = state.boss = { phase: 'waiting', timer: GAME_DATA.bossDelay ?? 2, uid: null, done: [], skillTimer: 0, warn: 0, recover: 0, enraged: false };
+    if (!state.bossReady) { enterBossPrep(state); return; }   // 먼저 보스전 준비 단계
+    B = state.boss = { phase: 'waiting', timer: GAME_DATA.bossDelay ?? 2, uid: null, done: [], slamTimer: 0, skillTimer: 0, cast: null, enraged: false, zones: [], frenzy: 0 };
   }
   if (B.phase === 'waiting') {
     B.timer -= dt;
     if (B.timer > 0) return;
     const e = createBoss(state, d);
     state.enemies.push(e);
-    B.phase = 'active'; B.uid = e.uid; B.skillTimer = d.slam.first;
-    state.events.push('SPAWN_0', 'BOSS_APPEAR');
+    B.phase = 'active'; B.uid = e.uid; B.slamTimer = d.slam.first; B.skillTimer = d.skill ? d.skill.first : Infinity;
+    state.events.push(`SPAWN_${bossSpawnIndex(d)}`, 'BOSS_APPEAR');
     return;
   }
   if (B.phase !== 'active') return;
@@ -1148,33 +1232,205 @@ function updateBoss(state, dt) {
       state.enemies.push(m);
     });
     state.events.push('BOSS_SUMMON');
+    if (d.skill && d.skill.afterSummon !== undefined) B.skillTimer = Math.min(B.skillTimer, d.skill.afterSummon);   // 카르갈간: 부하를 부르고 곧 광란의 주술
   });
   if (!B.enraged && e.hp <= e.maxHp * d.slam.enrageAt) { B.enraged = true; state.events.push('BOSS_ENRAGE'); }
-  // 3. 예고 광역 공격: 예고(정지) → 발동(반경 안 그림자 전부 피해) → 후딜레이 → 재사용 대기
-  const S = d.slam;
-  if (B.warn > 0) {
-    B.warn -= dt;
-    if (B.warn <= 0) {
-      B.warn = 0;
-      for (const s of getAllShadows(state)) {
-        if (!s.alive || dist(s.x, s.y, e.x, e.y) > S.radius) continue;
-        const died = applyDamage(s, calcDamage(S.damage));
-        s.hitAt = state.elapsed;
-        if (died) { addCorpse(state, s); state.events.push('SHADOW_DIED'); }
-      }
-      const fx = addEffect(state, e.x, e.y, e.x, e.y, 'enemy', 'bossSlam');
-      fx.radius = S.radius; fx.color = d.color;
-      B.recover = S.recover;
-      B.skillTimer = B.enraged ? S.enragedCooldown : S.cooldown;   // 재사용은 발동 순간부터
-      state.events.push('BOSS_SLAM');
-    }
-  } else if (B.recover > 0) {
-    B.recover -= dt;
-  } else {
-    B.skillTimer -= dt;
-    if (B.skillTimer <= 0) { B.warn = S.warn; B.warnTotal = S.warn; state.events.push('BOSS_WARN'); }
+  // 3. 남아 있는 효과: 독 웅덩이 · 광란의 주술
+  updateBossZones(state, e, dt);
+  if (B.frenzy > 0) B.frenzy = Math.max(0, B.frenzy - dt);
+  // 4. 기술: 광역 내려찍기와 고유 기술 중 하나씩만 (예고 → 발동 → 후딜레이)
+  if (B.cast) stepBossCast(state, B, d, e, dt);
+  else {
+    B.slamTimer -= dt;
+    if (d.skill) B.skillTimer -= dt;
+    if (B.slamTimer <= 0) startBossCast(state, B, d, e, 'slam');
+    else if (d.skill && B.skillTimer <= 0) startBossCast(state, B, d, e, d.skill.type);
   }
-  e.casting = B.warn > 0 || B.recover > 0;
+  const c = B.cast;
+  e.casting = !!c;                                           // 기술 중에는 제자리 (기본 공격도 쉼)
+  e.dashing = !!c && c.type === 'dash' && c.phase === 'act';
+  e.stealth = !!c && c.type === 'ambush' && c.phase === 'warn';
+}
+
+// 독 웅덩이: 0.5초마다 안에 있는 그림자에게 피해
+function updateBossZones(state, boss, dt) {
+  const B = state.boss;
+  for (const z of B.zones) {
+    z.ttl -= dt; z.tick -= dt;
+    if (z.tick > 0) continue;
+    z.tick += 0.5;
+    for (const s of getAllShadows(state)) {
+      if (s.alive && inGroundEllipse(s.x, s.y, z.x, z.y, z.r)) bossHitShadow(state, boss, s, z.dps * 0.5);
+    }
+  }
+  B.zones = B.zones.filter((z) => z.ttl > 0);
+}
+
+function startBossCast(state, B, d, e, type) {
+  const S = type === 'slam' ? d.slam : d.skill;
+  const shadows = getAllShadows(state).filter((s) => s.alive);
+  const core = GAME_DATA.field.core;
+  const c = { type, phase: 'warn', t: S.warn, total: S.warn };
+  const retry = () => { B.skillTimer = BOSS_RETRY; return null; };
+  if (type === 'poison') {
+    // 사거리 안 그림자마다 그 자리 웅덩이에 몇 기가 들어가는지 세어 가장 많은 무리의 가운데로
+    let best = null;
+    for (const s of shadows) {
+      if (dist(e.x, e.y, s.x, s.y) > S.range) continue;
+      const group = shadows.filter((o) => inGroundEllipse(o.x, o.y, s.x, s.y, S.radius));
+      const score = group.length * 1000 - dist(e.x, e.y, s.x, s.y);
+      if (!best || score > best.score) best = { score, group };
+    }
+    if (!best) return retry();
+    c.x = best.group.reduce((t, o) => t + o.x, 0) / best.group.length;
+    c.y = best.group.reduce((t, o) => t + o.y, 0) / best.group.length;
+    const spit = addEffect(state, e.x, e.y, c.x, c.y, 'enemy', 'poisonSpit');   // 예고가 끝날 즈음 독 덩어리가 날아감
+    spit.ttl = spit.life = S.warn;
+    faceToward(e, c.x);
+  } else if (type === 'ambush') {
+    const target = shadows.slice().sort((a, b) => (a.hp - b.hp) || (a.uid - b.uid))[0];
+    if (!target) return retry();
+    c.targetUid = target.uid;
+    state.events.push('BOSS_VANISH');
+  } else if (type === 'lightning') {
+    const n = B.enraged ? S.enragedCount : S.count;
+    const pool = shadows.slice();
+    c.marks = [];
+    while (pool.length && c.marks.length < n) {
+      const s = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+      c.marks.push({ x: s.x, y: s.y });
+    }
+    if (!c.marks.length) return retry();
+  } else if (type === 'dash') {
+    // 거점 쪽으로. 이미 거점 가까이 있으면 가장 가까운 그림자 쪽으로
+    let tx = core.x, ty = core.y, len = S.length;
+    if (dist(e.x, e.y, core.x, core.y) - coreRingRadius(e, core) < 50) {
+      const near = shadows.slice().sort((a, b) => dist(e.x, e.y, a.x, a.y) - dist(e.x, e.y, b.x, b.y))[0];
+      if (!near) return retry();
+      tx = near.x; ty = near.y; len = Math.min(len, dist(e.x, e.y, tx, ty) + 30);
+    }
+    const D = dist(e.x, e.y, tx, ty) || 1, ux = (tx - e.x) / D, uy = (ty - e.y) / D;
+    // 거점 둘레·전장 끝에 닿기 전에 멈춤
+    const F = GAME_DATA.field, m = F.unitMargin, R = coreRingRadius(e, core);
+    let L = 0;
+    while (L + 2 <= len) {
+      const x = e.x + ux * (L + 2), y = e.y + uy * (L + 2);
+      if (dist(x, y, core.x, core.y) < R || x < m || x > F.width - m || y < m || y > F.height - m) break;
+      L += 2;
+    }
+    if (L < 40) return retry();
+    Object.assign(c, { ux, uy, len: L, x0: e.x, y0: e.y, moved: 0, hit: [] });
+    faceToward(e, e.x + ux * 10);
+  } else if (type === 'beam') {
+    const ac = Math.atan2(core.y - e.y, core.x - e.x), h = S.arc / 2;
+    // 화면 왼쪽 끝에서 시작해 오른쪽으로 훑음
+    const leftFirst = Math.cos(ac + h) <= Math.cos(ac - h);
+    c.a0 = leftFirst ? ac + h : ac - h;
+    c.dir = leftFirst ? -1 : 1;   // 광선 각도 = a0 + dir × arc × 진행도
+    c.hit = [];
+    faceToward(e, core.x);
+  }
+  B.cast = c;
+  if (type !== 'ambush') state.events.push(`BOSS_WARN:${S.warn}`);
+  return c;
+}
+
+function stepBossCast(state, B, d, e, dt) {
+  const c = B.cast, S = c.type === 'slam' ? d.slam : d.skill;
+  c.t -= dt;
+  if (c.phase === 'warn') {
+    if (c.type === 'ambush' && !findShadowUnit(state, c.targetUid)) {   // 표식 대상이 사라짐 → 취소
+      B.cast = null; B.skillTimer = BOSS_RETRY; return;
+    }
+    if (c.t > 0) return;
+    releaseBossCast(state, B, d, e, c, S);
+    if (c.type === 'slam') B.slamTimer = B.enraged ? S.enragedCooldown : S.cooldown;   // 재사용은 발동 순간부터
+    else B.skillTimer = S.cooldown;
+    return;
+  }
+  if (c.phase === 'act') {
+    if (c.type === 'dash') {
+      const px = c.x0 + c.ux * c.moved, py = c.y0 + c.uy * c.moved;
+      c.moved = Math.min(c.len, c.moved + S.speed * dt);
+      e.x = c.x0 + c.ux * c.moved; e.y = c.y0 + c.uy * c.moved;
+      for (const s of getAllShadows(state)) {
+        if (!s.alive || c.hit.includes(s.uid)) continue;
+        if (distToSegment(s.x, s.y, px, py, e.x, e.y) > S.width / 2 + 6) continue;
+        c.hit.push(s.uid);
+        bossHitShadow(state, e, s, S.damage);
+      }
+      if (state.elapsed - (c.trailAt || -1) > 0.05) {   // 잔상
+        c.trailAt = state.elapsed;
+        const tr = addEffect(state, e.x, e.y, e.x, e.y, 'enemy', 'dashTrail');
+        tr.facing = e.facing;
+      }
+      if (c.moved >= c.len) { releaseBossFromCore(e); c.phase = 'recover'; c.t = S.recover || 0; }
+    } else if (c.type === 'beam') {
+      const p0 = c.prog || 0, p1 = Math.min(1, 1 - c.t / S.sweep);
+      c.prog = p1;
+      for (const s of getAllShadows(state)) {
+        if (!s.alive || c.hit.includes(s.uid) || dist(e.x, e.y, s.x, s.y) > S.range) continue;
+        const rel = angleDiff(Math.atan2(s.y - e.y, s.x - e.x), c.a0) * c.dir;   // 시작 쪽에서 훑는 방향으로 얼마나 들어갔는지
+        if (rel < -0.06 || rel > S.arc * p1 + 0.06) continue;
+        c.hit.push(s.uid);
+        bossHitShadow(state, e, s, S.damage);
+      }
+      if (c.t <= 0) { c.phase = 'recover'; c.t = S.recover || 0; }
+    }
+    return;
+  }
+  if (c.t <= 0) {   // 후딜레이 끝
+    B.cast = null;
+    B.slamTimer = Math.max(B.slamTimer, BOSS_SKILL_GAP);
+    B.skillTimer = Math.max(B.skillTimer, BOSS_SKILL_GAP);
+  }
+}
+
+// 예고가 끝나는 순간: 기술 발동
+function releaseBossCast(state, B, d, e, c, S) {
+  c.phase = 'recover'; c.t = S.recover || 0;
+  state.events.push(c.type === 'slam' ? 'BOSS_SLAM' : `BOSS_SKILL:${c.type}`);
+  if (c.type === 'slam') {
+    for (const s of getAllShadows(state)) {
+      if (s.alive && inGroundEllipse(s.x, s.y, e.x, e.y, S.radius)) bossHitShadow(state, e, s, S.damage);
+    }
+    const fx = addEffect(state, e.x, e.y, e.x, e.y, 'enemy', 'bossSlam');
+    fx.radius = S.radius; fx.color = d.color;
+  } else if (c.type === 'poison') {
+    B.zones.push({ x: c.x, y: c.y, r: S.radius, ttl: S.duration, dur: S.duration, dps: S.dps, tick: 0, color: d.color });
+    const fx = addEffect(state, c.x, c.y, c.x, c.y, 'enemy', 'poisonSplash');
+    fx.radius = S.radius;
+  } else if (c.type === 'ambush') {
+    const t = findShadowUnit(state, c.targetUid);
+    const core = GAME_DATA.field.core;
+    const fx0 = addEffect(state, e.x, e.y, e.x, e.y, 'enemy', 'iceShards');   // 사라진 자리
+    fx0.color = d.color;
+    // 대상의 거점 반대쪽(뒤)으로 순간이동
+    const D = dist(t.x, t.y, core.x, core.y) || 1;
+    e.x = t.x + (t.x - core.x) / D * (e.radius + 8);
+    e.y = t.y + (t.y - core.y) / D * (e.radius + 8);
+    releaseBossFromCore(e);
+    faceToward(e, t.x);
+    e.attackAt = state.elapsed;
+    bossHitShadow(state, e, t, S.damage);
+    const fx = addEffect(state, e.x, e.y, t.x, t.y, 'enemy', 'ambushSlash');
+    fx.color = d.color;
+  } else if (c.type === 'frenzy') {
+    B.frenzy = S.duration;
+    const fx = addEffect(state, e.x, e.y, e.x, e.y, 'enemy', 'frenzyWave');
+    fx.radius = 170;
+  } else if (c.type === 'lightning') {
+    for (const mk of c.marks) {
+      for (const s of getAllShadows(state)) {
+        if (s.alive && inGroundEllipse(s.x, s.y, mk.x, mk.y, S.radius)) bossHitShadow(state, e, s, S.damage);
+      }
+      const fx = addEffect(state, mk.x, mk.y, mk.x, mk.y, 'enemy', 'lightning');
+      fx.radius = S.radius; fx.seed = Math.random() * 1000;
+    }
+  } else if (c.type === 'dash' || c.type === 'beam') {
+    c.phase = 'act';
+    c.t = c.type === 'beam' ? S.sweep : Infinity;
+  }
 }
 
 function processEnemyAttacks(state) {
@@ -1206,7 +1462,7 @@ function processEnemyAttacks(state) {
     for (const t of hits) {
       const died = applyDamage(t, dmg);
       t.hitAt = state.elapsed;
-      if (died) { addCorpse(state, t); state.events.push('SHADOW_DIED'); }   // 그림자 사망 연출 (스프라이트가 있는 유닛만 그려짐) + 효과음
+      if (died) { addCorpse(state, t); state.events.push('SHADOW_DIED'); bossDevour(state, e, t); }   // 그림자 사망 연출 (스프라이트가 있는 유닛만 그려짐) + 효과음 (개미왕은 포식 회복)
     }
     faceToward(e, target.x);
     e.attackAt = state.elapsed;   // 공격 애니메이션용
@@ -1271,7 +1527,7 @@ function checkWaveComplete(state) {
 
 // 공격 연출 (게임 규칙에 영향 없음). style: 없으면 공격 선, 'claw'면 할퀴기 자국
 const LINE_FX_TIME = 0.12;
-const ATTACK_FX_TIME = { bossSlam: 0.5, claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36, bolt: 0.28, blast: 0.4, breath: 0.55, orb: 0.56, berclaw: 0.28, centclaw: 0.4, iceclaw: 0.42, icewave: 0.4, orcslash: 0.4, spear: 0.42, orcpunch: 0.46, axeslam: 0.42, rockspike: 0.44, hellbite: 0.42, clubslam: 0.44, curse: 0.6, reapwave: 0.5, antslash: 0.36, antclaw: 0.36, antblade: 0.44, acid: 0.42, queenstab: 0.34, crystalburst: 0.56, knightslash: 0.4, golemburst: 0.5, stonespell: 0.62, runebolt: 0.6, harpring: 0.62, stoneslash: 0.34 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
+const ATTACK_FX_TIME = { bossSlam: 0.5, poisonSplash: 0.5, iceShards: 0.45, ambushSlash: 0.4, frenzyWave: 0.7, lightning: 0.5, dashTrail: 0.35, devour: 0.9, claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36, bolt: 0.28, blast: 0.4, breath: 0.55, orb: 0.56, berclaw: 0.28, centclaw: 0.4, iceclaw: 0.42, icewave: 0.4, orcslash: 0.4, spear: 0.42, orcpunch: 0.46, axeslam: 0.42, rockspike: 0.44, hellbite: 0.42, clubslam: 0.44, curse: 0.6, reapwave: 0.5, antslash: 0.36, antclaw: 0.36, antblade: 0.44, acid: 0.42, queenstab: 0.34, crystalburst: 0.56, knightslash: 0.4, golemburst: 0.5, stonespell: 0.62, runebolt: 0.6, harpring: 0.62, stoneslash: 0.34 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
 const ORB_IMPACT_TIME = 0.18;   // 마력구가 닿은 뒤 터지며 흩어지는 시간(초)
 function addEffect(state, x1, y1, x2, y2, kind, style) {
   const ttl = ATTACK_FX_TIME[style] || LINE_FX_TIME;
@@ -1347,6 +1603,16 @@ function validateGameData(data) {
     const S = b.slam || {};
     for (const k of ['first', 'warn', 'radius', 'damage', 'cooldown', 'enragedCooldown']) {
       if (!isPos(S[k])) errors.push(`bosses ${b.id}: slam.${k} 값이 올바르지 않습니다 (${S[k]}).`);
+    }
+    if (b.skill) {   // 고유 기술: 종류마다 필요한 값
+      const K = b.skill, need = {
+        poison: ['range', 'radius', 'duration', 'dps'], ambush: ['damage'], frenzy: ['duration', 'haste'],
+        lightning: ['count', 'enragedCount', 'radius', 'damage'], dash: ['length', 'width', 'speed', 'damage'], beam: ['sweep', 'range', 'arc', 'damage'],
+      }[K.type];
+      if (!need) errors.push(`bosses ${b.id}: skill.type ${K.type}은(는) 없는 기술입니다.`);
+      for (const k of ['first', 'warn', 'cooldown'].concat(need || [])) {
+        if (!isPos(K[k])) errors.push(`bosses ${b.id}: skill.${k} 값이 올바르지 않습니다 (${K[k]}).`);
+      }
     }
   }
 
@@ -2179,25 +2445,201 @@ function drawSpriteFrame(ctx, cfg, tinted, animName, frame, x, y, facing, alpha,
 
 function hexRgb(hex) { const n = parseInt(hex.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
 
-// 보스 광역 공격 예고: 바닥에 반경 원 + 가운데서 차오르는 채움 (다 차면 발동). 끝에 가까울수록 빨리 깜빡임
-function drawBossWarning(ctx, state) {
-  const B = state.boss;
-  if (!B || !(B.warn > 0)) return;
-  const e = state.enemies.find((x) => x.uid === B.uid);
-  if (!e) return;
-  const d = findEnemyData(e.typeId), S = d.slam, c = hexRgb(d.color);
-  const p = 1 - B.warn / (B.warnTotal || S.warn);   // 0 → 1
-  const cy = e.y + 8, R = S.radius;
-  const blink = 0.55 + 0.45 * Math.abs(Math.sin(state.elapsed * (6 + 14 * p)));
-  ctx.save();
+// 바닥 예고 타원: 옅은 바탕 + 가운데서 차오르는 채움(다 차면 발동) + 점선 테두리. 끝에 가까울수록 빨리 깜빡임
+function drawGroundWarn(ctx, x, y, R, c, p, blink) {
+  const gy = spriteGroundY(y), ry = R * GROUND_FLAT;
   ctx.fillStyle = rgba(c, 0.10 + 0.08 * blink);
-  ctx.beginPath(); ctx.ellipse(e.x, cy, R, R * 0.55, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(x, gy, R, ry, 0, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = rgba(c, 0.28);
-  ctx.beginPath(); ctx.ellipse(e.x, cy, R * p, R * 0.55 * p, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(x, gy, R * p, ry * p, 0, 0, Math.PI * 2); ctx.fill();
   ctx.strokeStyle = rgba(c, 0.6 + 0.4 * blink); ctx.lineWidth = 2;
   ctx.setLineDash([6, 4]);
-  ctx.beginPath(); ctx.ellipse(e.x, cy, R, R * 0.55, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(x, gy, R, ry, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+// 독 웅덩이: 나타날 때 퍼지고, 끝나기 전에 옅어짐. 기포가 올라왔다 터짐
+const POISON_RGB = [90, 220, 100];
+function drawPoisonPool(ctx, z, T) {
+  const age = z.dur - z.ttl;
+  const a = Math.min(1, age / 0.2) * Math.min(1, z.ttl / 0.6);
+  const gy = spriteGroundY(z.y), R = z.r * (0.8 + 0.2 * Math.min(1, age / 0.25)), ry = R * GROUND_FLAT;
+  ctx.save();
+  ctx.fillStyle = `rgba(30, 120, 50, ${0.32 * a})`;
+  ctx.beginPath(); ctx.ellipse(z.x, gy, R, ry, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = `rgba(110, 240, 120, ${0.18 * a})`;
+  ctx.beginPath(); ctx.ellipse(z.x, gy, R * 0.6, ry * 0.6, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = `rgba(140, 255, 150, ${0.55 * a})`; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.ellipse(z.x, gy, R, ry, 0, 0, Math.PI * 2); ctx.stroke();
+  for (let i = 0; i < 7; i++) {   // 기포 (자리는 웅덩이마다 고정, 박자는 어긋나게)
+    const ang = i * 2.4 + z.x * 0.1, rr = 0.25 + 0.6 * ((i * 0.37 + z.y * 0.013) % 1);
+    const bx = z.x + Math.cos(ang) * R * rr, by = gy + Math.sin(ang) * ry * rr;
+    const ph = (T * 1.6 + i * 0.29) % 1;
+    ctx.strokeStyle = `rgba(170, 255, 170, ${a * (1 - ph)})`; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(bx, by - ph * 3, 1 + ph * 2.5, 0, Math.PI * 2); ctx.stroke();
+  }
   ctx.restore();
+}
+
+function bossCastInfo(state) {
+  const B = state.boss;
+  if (!B || B.phase !== 'active') return null;
+  const e = state.enemies.find((x) => x.uid === B.uid);
+  if (!e) return null;
+  return { B, e, d: findEnemyData(e.typeId) };
+}
+
+// 보스 바닥 연출 (유닛 아래): 독 웅덩이 · 광란 오라 · 기술 예고(타원·표식·돌진선·부채꼴)
+function drawBossFloor(ctx, state) {
+  const info = bossCastInfo(state);
+  if (!info) return;
+  const { B, e, d } = info, T = state.elapsed, col = hexRgb(d.color);
+  ctx.save();
+  for (const z of B.zones) drawPoisonPool(ctx, z, T);
+  if (B.frenzy > 0) {   // 광란의 주술: 모든 적 발밑에 붉은 오라
+    const fade = Math.min(1, B.frenzy / 0.5);
+    for (const m of state.enemies) {
+      if (!m.alive) continue;
+      const r = (m.radius + 8) * (m.isBoss ? 1.2 : 1), pulse = 0.5 + 0.5 * Math.sin(T * 10 + m.uid);
+      const gy = spriteGroundY(m.y) - 1;
+      ctx.fillStyle = `rgba(255, 40, 30, ${(0.16 + 0.12 * pulse) * fade})`;
+      ctx.beginPath(); ctx.ellipse(m.x, gy, r, r * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = `rgba(255, 110, 70, ${(0.5 + 0.35 * pulse) * fade})`; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.ellipse(m.x, gy, r, r * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+  const c = B.cast;
+  if (c) {
+    const S = c.type === 'slam' ? d.slam : d.skill;
+    const p = c.phase === 'warn' ? 1 - c.t / c.total : 1;
+    const blink = 0.55 + 0.45 * Math.abs(Math.sin(T * (6 + 14 * p)));
+    if (c.phase === 'warn' && c.type === 'slam') drawGroundWarn(ctx, e.x, e.y, S.radius, col, p, blink);
+    else if (c.phase === 'warn' && c.type === 'poison') drawGroundWarn(ctx, c.x, c.y, S.radius, POISON_RGB, p, blink);
+    else if (c.phase === 'warn' && c.type === 'frenzy') {   // 주술 시전: 보스 발밑에 붉은 고리가 조여 듦
+      const gy = spriteGroundY(e.y);
+      for (const k of [1, 0.6]) {
+        const R = (70 - 34 * p) * k;
+        ctx.strokeStyle = `rgba(255, 60, 40, ${(0.5 + 0.5 * blink) * (k === 1 ? 1 : 0.7)})`; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.ellipse(e.x, gy, R, R * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.stroke();
+      }
+    }
+    else if (c.phase === 'warn' && c.type === 'lightning') {
+      for (const mk of c.marks) {
+        drawGroundWarn(ctx, mk.x, mk.y, S.radius, col, p, blink);
+        const gy = spriteGroundY(mk.y), g = ctx.createLinearGradient(0, gy - 220, 0, gy);   // 하늘에서 내려오는 옅은 기둥
+        g.addColorStop(0, rgba(col, 0)); g.addColorStop(1, rgba(col, 0.22 * blink * p));
+        ctx.fillStyle = g; ctx.fillRect(mk.x - 3, gy - 220, 6, 220);
+      }
+    } else if (c.phase === 'warn' && c.type === 'dash') {   // 돌진선: 폭만큼의 띠 + 앞으로 차오르는 채움 + 흐르는 화살표
+      ctx.save();
+      ctx.translate(c.x0, spriteGroundY(c.y0)); ctx.rotate(Math.atan2(c.uy, c.ux));
+      const w = S.width / 2;
+      ctx.fillStyle = rgba(col, 0.12 + 0.08 * blink); ctx.fillRect(0, -w, c.len, w * 2);
+      ctx.fillStyle = rgba(col, 0.28); ctx.fillRect(0, -w, c.len * p, w * 2);
+      ctx.strokeStyle = rgba(col, 0.6 + 0.4 * blink); ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+      ctx.strokeRect(0, -w, c.len, w * 2); ctx.setLineDash([]);
+      ctx.strokeStyle = rgba(col, 0.8); ctx.lineWidth = 2.5;
+      for (let x = ((T * 120) % 30); x < c.len - 8; x += 30) {
+        ctx.beginPath(); ctx.moveTo(x, -w * 0.5); ctx.lineTo(x + 8, 0); ctx.lineTo(x, w * 0.5); ctx.stroke();
+      }
+      ctx.restore();
+    } else if (c.type === 'beam' && c.phase !== 'recover') {   // 부채꼴: 예고 중엔 깜빡이며 차오름, 훑는 중엔 지나간 자리가 그을림
+      const gx = e.x, gy = spriteGroundY(e.y), a1 = c.a0 + c.dir * S.arc;
+      const sector = (from, to, R) => { ctx.beginPath(); ctx.moveTo(gx, gy); ctx.arc(gx, gy, R, Math.min(from, to), Math.max(from, to)); ctx.closePath(); };
+      if (c.phase === 'warn') {
+        ctx.fillStyle = rgba(col, 0.10 + 0.08 * blink); sector(c.a0, a1, S.range); ctx.fill();
+        ctx.fillStyle = rgba(col, 0.22); sector(c.a0, a1, S.range * p); ctx.fill();
+        ctx.strokeStyle = rgba(col, 0.6 + 0.4 * blink); ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+        sector(c.a0, a1, S.range); ctx.stroke(); ctx.setLineDash([]);
+      } else {
+        ctx.fillStyle = 'rgba(255, 140, 40, 0.18)'; sector(c.a0, c.a0 + c.dir * S.arc * (c.prog || 0), S.range); ctx.fill();
+      }
+    }
+  }
+  ctx.restore();
+}
+
+// 보스 출현 예고: 보스전 준비 단계와 등장 직전(bossDelay)에 그 출입구에서 보스 색 빛이 맥동하고 거점 쪽으로 화살표가 흐름
+//  time은 실제 시간 (준비 단계에는 게임 시간이 멈춰 있음)
+function drawBossSpawnMark(ctx, state, time) {
+  const waiting = state.boss && state.boss.phase === 'waiting';
+  if (!(state.status === STATUS.PREPARATION && state.bossPrep) && !(waiting && state.status === STATUS.PLAYING)) return;
+  const d = findBossData(state.chapterId);
+  if (!d) return;
+  const sp = spawnPointFor(state.chapterId, bossSpawnIndex(d)), core = GAME_DATA.field.core, F = GAME_DATA.field;
+  const c = hexRgb(d.color), pulse = 0.5 + 0.5 * Math.sin(time * 4);
+  const D = dist(sp.x, sp.y, core.x, core.y) || 1, ux = (core.x - sp.x) / D, uy = (core.y - sp.y) / D;
+  ctx.save();
+  const g = ctx.createRadialGradient(sp.x, sp.y, 0, sp.x, sp.y, 70 + 10 * pulse);   // 출입구 빛
+  g.addColorStop(0, rgba(c, 0.55 + 0.25 * pulse)); g.addColorStop(1, rgba(c, 0));
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(sp.x, sp.y, 80, 0, Math.PI * 2); ctx.fill();
+  ctx.translate(sp.x, sp.y); ctx.rotate(Math.atan2(uy, ux));   // 거점 쪽으로 흐르는 화살표 3개
+  ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.shadowColor = rgba(c, 0.9); ctx.shadowBlur = 8;
+  for (let i = 0; i < 3; i++) {
+    const ph = ((time * 0.8 + i / 3) % 1), x = 30 + ph * 90;
+    ctx.strokeStyle = rgba(c, Math.sin(Math.PI * ph) * 0.95);
+    ctx.beginPath(); ctx.moveTo(x - 9, -12); ctx.lineTo(x + 3, 0); ctx.lineTo(x - 9, 12); ctx.stroke();
+  }
+  ctx.restore();
+  const lx = Math.max(70, Math.min(F.width - 70, sp.x + ux * 70)), ly = Math.max(40, sp.y + uy * 70 - 34);
+  drawLabel(ctx, `⚠ 보스 ${d.name} 출현`, lx, ly, rgba([255, 230, 200], 0.75 + 0.25 * pulse), 'bold 13px Galmuri11, sans-serif');
+}
+
+// 보스 위쪽 연출 (유닛 위): 은신 기습 표식 · 눈 광선
+function drawBossOverlay(ctx, state) {
+  const info = bossCastInfo(state);
+  if (!info || !info.B.cast) return;
+  const { B, e, d } = info, c = B.cast, T = state.elapsed, col = hexRgb(d.color);
+  ctx.save();
+  if (c.type === 'ambush' && c.phase === 'warn') {   // 표식: 대상 머리 위 아래로 향한 마름모 + 발밑 붉은 고리
+    const t = findShadowUnit(state, c.targetUid);
+    if (t) {
+      const p = 1 - c.t / c.total, blink = 0.5 + 0.5 * Math.abs(Math.sin(T * (8 + 16 * p)));
+      const hy = t.y - 40 + Math.sin(T * 6) * 2;
+      ctx.shadowColor = 'rgba(255, 60, 80, 0.9)'; ctx.shadowBlur = 8;
+      ctx.fillStyle = `rgba(255, 70, 90, ${0.6 + 0.4 * blink})`;
+      ctx.beginPath(); ctx.moveTo(t.x, hy + 9); ctx.lineTo(t.x - 6, hy); ctx.lineTo(t.x, hy - 7); ctx.lineTo(t.x + 6, hy); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = rgba(col, 0.9); ctx.lineWidth = 1; ctx.stroke();
+      ctx.shadowBlur = 0;
+      const gy = spriteGroundY(t.y), r = 16 - 4 * p;
+      ctx.strokeStyle = `rgba(255, 70, 90, ${0.5 + 0.5 * blink})`; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.ellipse(t.x, gy, r, r * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.stroke();
+    }
+  } else if (c.type === 'beam') {
+    const cfg = spriteFor(e.typeId, state.chapterId);
+    const ex = e.x, ey = cfg ? spriteTopY(cfg, e.y, 1) + 12 : e.y - 30;   // 눈 높이
+    if (c.phase === 'warn') {   // 눈에 빛이 모임
+      const p = 1 - c.t / c.total;
+      const g = ctx.createRadialGradient(ex, ey, 0, ex, ey, 6 + 10 * p);
+      g.addColorStop(0, `rgba(255, 250, 220, ${0.5 + 0.5 * p})`); g.addColorStop(1, 'rgba(255, 200, 80, 0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(ex, ey, 6 + 10 * p, 0, Math.PI * 2); ctx.fill();
+    } else if (c.phase === 'act') {
+      const S = d.skill, a = c.a0 + c.dir * S.arc * (c.prog || 0);
+      const tx = e.x + Math.cos(a) * S.range, ty = spriteGroundY(e.y) + Math.sin(a) * S.range;
+      const flick = 0.85 + 0.15 * Math.sin(T * 60);
+      ctx.lineCap = 'round';
+      ctx.shadowColor = 'rgba(255, 190, 70, 0.95)'; ctx.shadowBlur = 18;
+      ctx.strokeStyle = `rgba(255, 180, 60, ${0.45 * flick})`; ctx.lineWidth = 12;
+      ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(tx, ty); ctx.stroke();
+      ctx.strokeStyle = `rgba(255, 245, 210, ${0.95 * flick})`; ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(tx, ty); ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = 'rgba(255, 230, 160, 0.8)';   // 땅에 닿는 곳 불꽃
+      ctx.beginPath(); ctx.ellipse(tx, ty, 9, 5, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255, 255, 240, 0.95)';
+      ctx.beginPath(); ctx.arc(ex, ey, 4, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+// 은신 중 보스 투명도: 0.3초 동안 빠르게 옅어져 아른거림
+function stealthAlpha(state) {
+  const c = state.boss && state.boss.cast;
+  if (!c) return 1;
+  const p = 1 - c.t / c.total;
+  return Math.max(0.14, 1 - p / 0.3) + 0.05 * Math.sin(state.elapsed * 20);
 }
 
 // 보스 HP 바: 전장 위 가운데. 보스 이름 + 긴 바 + 소환 구간(70%·40%) 눈금. 보스가 살아 있을 때만
@@ -2222,6 +2664,15 @@ function drawBossBar(ctx, state) {
   for (const sm of d.summons) ctx.fillRect(Math.round(x + W * sm.at), y - 2, 1, H + 4);
   ctx.restore();
   drawLabel(ctx, `${d.name}${B.enraged ? ' · 분노' : ''}`, GAME_DATA.field.width / 2, y - 10, COLORS.text, '13px Galmuri11, sans-serif');
+  // 지금 쓰는 기술 이름 (바 아래). 광란의 주술은 남은 시간도
+  const cast = B.cast && B.cast.phase !== 'recover' ? B.cast : null;
+  const skillText = cast ? (cast.type === 'slam' ? '광역 내려찍기' : d.skill.name)
+    : B.frenzy > 0 ? `${d.skill.name} ${Math.ceil(B.frenzy)}초` : '';
+  if (skillText) {
+    const blink = 0.6 + 0.4 * Math.abs(Math.sin(state.elapsed * 8));
+    const tc = !cast ? [255, 110, 80] : cast.type === 'slam' ? c : [255, 200, 120];   // 광란 남은 시간: 붉게 / 내려찍기: 보스 색 / 고유 기술: 주황
+    drawLabel(ctx, `⚠ ${skillText}`, GAME_DATA.field.width / 2, y + H + 14, rgba(tc, blink), '12px Galmuri11, sans-serif');
+  }
 }
 
 // 원본 시트를 보랏빛 그림자로 물들인 사본 (픽셀을 읽지 않으므로 파일로 열어도 동작)
@@ -3237,13 +3688,146 @@ const PROC_FX = {
     const R = fx.radius * (0.25 + 0.75 * Math.sqrt(p));
     ctx.save();
     ctx.fillStyle = rgba(c, 0.35 * (1 - p));
-    ctx.beginPath(); ctx.ellipse(fx.x1, fx.y1 + 8, R, R * 0.55, 0, 0, Math.PI * 2); ctx.fill();
+    const gy = spriteGroundY(fx.y1), F = GROUND_FLAT;
+    ctx.beginPath(); ctx.ellipse(fx.x1, gy, R, R * F, 0, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = rgba(c, 1 - p); ctx.lineWidth = 4 * (1 - p) + 1;
     ctx.shadowColor = rgba(c, 0.9); ctx.shadowBlur = 12;
-    ctx.beginPath(); ctx.ellipse(fx.x1, fx.y1 + 8, R, R * 0.55, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(fx.x1, gy, R, R * F, 0, 0, Math.PI * 2); ctx.stroke();
     ctx.strokeStyle = `rgba(255,255,255,${0.8 * (1 - p)})`; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.ellipse(fx.x1, fx.y1 + 8, R * 0.8, R * 0.44, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(fx.x1, gy, R * 0.8, R * 0.8 * F, 0, 0, Math.PI * 2); ctx.stroke();
     ctx.restore();
+  },
+  // ── 보스 고유 기술 임시 연출 (이펙트 그림을 받으면 교체) ──
+  // 카사카 독 덩어리: 예고의 마지막 35% 동안 입에서 웅덩이 자리로 포물선을 그리며 날아감
+  poisonSpit(ctx, fx) {
+    const p = Math.min(1, (fx.life - fx.ttl) / fx.life);
+    if (p < 0.65) return;
+    const q = (p - 0.65) / 0.35, x1 = fx.x1, y1 = fx.y1 - 22, x2 = fx.x2, y2 = spriteGroundY(fx.y2);
+    ctx.save();
+    ctx.shadowColor = 'rgba(90, 255, 110, 0.9)'; ctx.shadowBlur = 8;
+    for (let k = 0; k < 3; k++) {   // 덩어리 + 뒤따르는 방울 2개
+      const t = Math.max(0, q - k * 0.08);
+      const x = x1 + (x2 - x1) * t, y = y1 + (y2 - y1) * t - Math.sin(Math.PI * t) * 45;
+      ctx.fillStyle = k ? 'rgba(120, 240, 120, 0.7)' : 'rgba(150, 255, 140, 1)';
+      ctx.beginPath(); ctx.arc(x, y, k ? 2.5 - k * 0.5 : 5, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  },
+  // 독이 땅에 터짐: 퍼지는 고리 + 튀는 방울
+  poisonSplash(ctx, fx) {
+    const p = Math.min(1, (fx.life - fx.ttl) / fx.life), gy = spriteGroundY(fx.y1), R = fx.radius * (0.3 + 0.9 * Math.sqrt(p));
+    ctx.save();
+    ctx.strokeStyle = `rgba(150, 255, 150, ${1 - p})`; ctx.lineWidth = 3 * (1 - p) + 1;
+    ctx.beginPath(); ctx.ellipse(fx.x1, gy, R, R * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = `rgba(130, 250, 130, ${1 - p})`;
+    for (let i = 0; i < 9; i++) {
+      const a = i / 9 * Math.PI * 2, r = fx.radius * 0.8 * p;
+      ctx.beginPath(); ctx.arc(fx.x1 + Math.cos(a) * r, gy + Math.sin(a) * r * GROUND_FLAT - Math.sin(Math.PI * p) * 14, 2, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  },
+  // 바루카가 사라진 자리: 얼음 파편이 흩어지고 냉기가 퍼짐
+  iceShards(ctx, fx) {
+    const p = Math.min(1, (fx.life - fx.ttl) / fx.life), cy = fx.y1 - 6;
+    ctx.save();
+    ctx.fillStyle = `rgba(190, 235, 255, ${0.3 * (1 - p)})`;
+    ctx.beginPath(); ctx.ellipse(fx.x1, spriteGroundY(fx.y1), 24 + 16 * p, (24 + 16 * p) * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = `rgba(220, 245, 255, ${1 - p})`; ctx.lineWidth = 2; ctx.lineCap = 'round';
+    ctx.shadowColor = 'rgba(140, 220, 255, 0.9)'; ctx.shadowBlur = 6;
+    for (let i = 0; i < 8; i++) {
+      const a = i / 8 * Math.PI * 2 + 0.3, r0 = 8 + 26 * p, r1 = r0 + 6 * (1 - p);
+      ctx.beginPath(); ctx.moveTo(fx.x1 + Math.cos(a) * r0, cy + Math.sin(a) * r0 * 0.8); ctx.lineTo(fx.x1 + Math.cos(a) * r1, cy + Math.sin(a) * r1 * 0.8); ctx.stroke();
+    }
+    ctx.restore();
+  },
+  // 바루카 기습 베기: 대상 위에 X자로 두 번 베고 얼음빛이 남음
+  ambushSlash(ctx, fx) {
+    const p = Math.min(1, (fx.life - fx.ttl) / fx.life), x = fx.x2, y = fx.y2 - 10, L = 26;
+    ctx.save();
+    ctx.lineCap = 'round'; ctx.shadowColor = 'rgba(140, 220, 255, 1)'; ctx.shadowBlur = 10;
+    [[-1, 0], [1, 0.25]].forEach(([dir, delay]) => {
+      const q = Math.max(0, Math.min(1, (p - delay) / 0.3));
+      if (q <= 0) return;
+      const fade = 1 - Math.max(0, (p - delay - 0.3) / (0.7 - delay));
+      const ax = x - L * dir, ay = y - L, bx = x + L * dir, by = y + L;
+      const ex = ax + (bx - ax) * q, ey = ay + (by - ay) * q;
+      ctx.strokeStyle = `rgba(150, 220, 255, ${0.6 * fade})`; ctx.lineWidth = 6;
+      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(ex, ey); ctx.stroke();
+      ctx.strokeStyle = `rgba(255, 255, 255, ${fade})`; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(ex, ey); ctx.stroke();
+    });
+    ctx.restore();
+  },
+  // 카르갈간 광란의 주술: 붉은 충격파 두 겹이 퍼짐 + 솟는 핏빛 기운
+  frenzyWave(ctx, fx) {
+    const p = Math.min(1, (fx.life - fx.ttl) / fx.life), gy = spriteGroundY(fx.y1);
+    ctx.save();
+    ctx.shadowColor = 'rgba(255, 50, 30, 0.9)'; ctx.shadowBlur = 12;
+    for (const [k, w] of [[1, 4], [0.65, 2]]) {
+      const R = fx.radius * k * Math.sqrt(p);
+      ctx.strokeStyle = `rgba(255, 70, 50, ${1 - p})`; ctx.lineWidth = w * (1 - p) + 1;
+      ctx.beginPath(); ctx.ellipse(fx.x1, gy, R, R * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.fillStyle = `rgba(255, 90, 60, ${0.8 * (1 - p)})`;
+    for (let i = 0; i < 10; i++) {
+      const a = i / 10 * Math.PI * 2, r = 18 + 10 * (i % 3);
+      ctx.fillRect(fx.x1 + Math.cos(a) * r - 1, gy + Math.sin(a) * r * GROUND_FLAT - 50 * p - (i % 4) * 6, 2, 6);
+    }
+    ctx.restore();
+  },
+  // 바란 낙뢰: 하늘에서 지그재그로 내리꽂힘(두 번 번쩍) + 땅이 터짐
+  lightning(ctx, fx) {
+    const p = Math.min(1, (fx.life - fx.ttl) / fx.life), gy = spriteGroundY(fx.y1), x = fx.x1;
+    ctx.save();
+    const on = p < 0.14 || (p > 0.2 && p < 0.42);
+    if (on) {
+      let seed = Math.floor(fx.seed + (p > 0.2 ? 7 : 0));
+      const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+      const pts = [];
+      for (let i = 0; i <= 10; i++) pts.push([x + (i === 10 ? 0 : (rnd() - 0.5) * 22), gy - 260 + 26 * i]);
+      ctx.lineJoin = 'round';
+      ctx.shadowColor = 'rgba(255, 80, 60, 1)'; ctx.shadowBlur = 16;
+      for (const [w, st] of [[7, 'rgba(255, 90, 70, 0.55)'], [2.5, 'rgba(255, 245, 240, 1)']]) {
+        ctx.strokeStyle = st; ctx.lineWidth = w;
+        ctx.beginPath(); pts.forEach(([px, py], i) => (i ? ctx.lineTo(px, py) : ctx.moveTo(px, py))); ctx.stroke();
+      }
+    }
+    const R = fx.radius * (0.4 + 0.9 * Math.sqrt(p));
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = `rgba(255, 200, 180, ${0.5 * (1 - p)})`;
+    ctx.beginPath(); ctx.ellipse(x, gy, R, R * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = `rgba(255, 90, 70, ${1 - p})`; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.ellipse(x, gy, R * 1.2, R * 1.2 * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  },
+  // 개미왕 돌진 잔상: 그 자리의 보스 모습이 빠르게 옅어짐 + 흙먼지
+  dashTrail(ctx, fx, state) {
+    const p = Math.min(1, (fx.life - fx.ttl) / fx.life);
+    const B = state && state.boss, e = B && state.enemies.find((x) => x.uid === B.uid);
+    const cfg = e ? spriteFor(e.typeId, state.chapterId) : null;
+    if (cfg) drawSpriteFrame(ctx, cfg, false, 'walk', 2, fx.x1, fx.y1, fx.facing || 1, 0.35 * (1 - p), 1, 0, null);
+    ctx.save();
+    ctx.fillStyle = `rgba(150, 110, 80, ${0.35 * (1 - p)})`;
+    ctx.beginPath(); ctx.ellipse(fx.x1, spriteGroundY(fx.y1), 10 + 12 * p, (10 + 12 * p) * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  },
+  // 개미왕 포식: 쓰러진 그림자에서 붉은 빛이 보스에게 빨려 들어감 + 회복량
+  devour(ctx, fx, state) {
+    const p = Math.min(1, (fx.life - fx.ttl) / fx.life);
+    const B = state && state.boss, e = B && state.enemies.find((x) => x.uid === B.uid);
+    const tx = e ? e.x : fx.x2, ty = (e ? e.y : fx.y2) - 16;
+    ctx.save();
+    ctx.shadowColor = 'rgba(255, 40, 70, 0.9)'; ctx.shadowBlur = 8;
+    for (let i = 0; i < 8; i++) {
+      const q = Math.max(0, Math.min(1, (p - i * 0.03) / 0.55));
+      if (q <= 0 || q >= 1) continue;
+      const sw = Math.sin(q * Math.PI) * 18 * (i % 2 ? 1 : -1), a = i / 8 * Math.PI * 2;
+      const x = fx.x1 + (tx - fx.x1) * q + Math.cos(a) * sw, y = fx.y1 - 10 + (ty - fx.y1 + 10) * q + Math.sin(a) * sw * 0.6;
+      ctx.fillStyle = `rgba(255, ${70 + i * 10}, 90, ${0.9 * (1 - q * 0.4)})`;
+      ctx.beginPath(); ctx.arc(x, y, 2.5, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+    if (p > 0.45 && e) drawLabel(ctx, `+${fx.amount}`, e.x, e.y - 50 - (p - 0.45) * 30, `rgba(255, 120, 140, ${1 - (p - 0.45) / 0.55})`, 'bold 12px Galmuri11, sans-serif');
   },
   // 탄환: 쏜 쪽에서 맞은 쪽으로 날아가며 꼬리를 남기고, 끝에서 작게 터짐
   bolt(ctx, fx) {
@@ -3772,7 +4356,7 @@ function render(ctx, state, view) {
     ctx.lineWidth = 1;
   }
 
-  drawBossWarning(ctx, state);   // 보스 광역 공격 예고 원 (바닥)
+  drawBossFloor(ctx, state);   // 보스 바닥 연출: 기술 예고 · 독 웅덩이 · 광란 오라
 
   // 기본 그림자
   for (const u of state.basicUnits) {
@@ -3883,10 +4467,11 @@ function render(ctx, state, view) {
     const cfg = spriteFor(e.typeId, state.chapterId);
     if (cfg) {   // 스프라이트: 이동·공격·피격 애니메이션
       const pick = pickAnim(e, state.elapsed, e.moving, cfg, !e.moving);
+      const alpha = e.stealth ? stealthAlpha(state) : 1;   // 바루카 은신: 거의 투명
       withClip(ctx, clipTop, () => {
-        drawGroundShadow(ctx, cfg, pick.anim, pick.frame, e.x, e.y, 1, 1, GROUND_SHADOW);
-        drawSpriteFrame(ctx, cfg, false, pick.anim, pick.frame, e.x, e.y, e.facing || 1, 1, 1, pick.bob, hitFx(e.hitAt, state.elapsed));
-        drawHpBar(ctx, e.x, spriteTopY(cfg, e.y, 1) - 6, e.isBoss ? 48 : 30, e.hp / e.maxHp, COLORS.hpEnemy);
+        drawGroundShadow(ctx, cfg, pick.anim, pick.frame, e.x, e.y, alpha, 1, GROUND_SHADOW);
+        drawSpriteFrame(ctx, cfg, false, pick.anim, pick.frame, e.x, e.y, e.facing || 1, alpha, 1, pick.bob, hitFx(e.hitAt, state.elapsed));
+        if (!e.stealth) drawHpBar(ctx, e.x, spriteTopY(cfg, e.y, 1) - 6, e.isBoss ? 48 : 30, e.hp / e.maxHp, COLORS.hpEnemy);
       });
       continue;
     }
@@ -3909,7 +4494,7 @@ function render(ctx, state, view) {
 
   // 공격 선 / 할퀴기 자국
   for (const fx of state.effects) {
-    if (PROC_FX[fx.style]) { PROC_FX[fx.style](ctx, fx); continue; }   // 그림 없이 코드로 그리는 탄환·폭발
+    if (PROC_FX[fx.style]) { PROC_FX[fx.style](ctx, fx, state); continue; }   // 그림 없이 코드로 그리는 탄환·폭발·보스 기술
     if (PROJ_FX[fx.style]) {       // 날아가는 투사체: 오크 창병 투창 · 리치 저주 구체 · 산성 개미 분비액 (그림이 없으면 탄환으로 대신)
       if (drawSpearFx(ctx, fx, PROJ_FX[fx.style])) continue;
       PROC_FX.bolt(ctx, fx); continue;
@@ -3940,7 +4525,9 @@ function render(ctx, state, view) {
   // 설원 숲: 휘날리는 눈 (유닛 위, 배치 미리보기 아래)
   if (theme.snow) drawSnowfall(ctx, view.time);
 
-  drawBossBar(ctx, state);   // 보스 이름 + HP 바 (전장 위 가운데)
+  drawBossOverlay(ctx, state);   // 은신 기습 표식 · 눈 광선 (유닛 위)
+  drawBossSpawnMark(ctx, state, view.time);   // 보스전 준비 · 등장 직전: 보스가 나올 출입구 표시
+  drawBossBar(ctx, state);   // 보스 이름 + HP 바 + 지금 쓰는 기술 (전장 위 가운데)
 
   // 배치 미리보기 (카드 선택 중 마우스 위치)
   if (placing && view.mouse && view.hoverRemnantUid === null) {
@@ -4019,6 +4606,9 @@ function onStatusChanged(st) {
     game.save.resume[st.chapterId] = serializeRun(st);
     persistSave();
     sfx('waveClear');   // F02
+  } else if (st.status === STATUS.PREPARATION && st.bossPrep) {   // 보스전 준비: 여기서 나가도 보스전부터 이어함
+    game.save.resume[st.chapterId] = serializeRun(st);
+    persistSave();
   } else if (st.status === STATUS.VICTORY) {
     game.clearInfo = recordChapterClear(game.save, st);
     const next = getNextChapter(st.chapterId);   // 다음 챕터를 새로 시작하면 남은 거점 HP를 이어받음 (newGame)
@@ -4251,7 +4841,7 @@ function resumeChapter(chapterId) {
   game.save.carry = null;   // 이어하기는 저장된 거점 HP 그대로 (회복 없음)
   persistSave();
   setGameState(restoreRun(run, getUnlockedShadowIds(game.save)));
-  showToast(`챕터 ${chapterId} · WAVE ${game.state.wave}부터 이어합니다`, 'ok');
+  showToast(`챕터 ${chapterId} · ${game.state.bossPrep ? '보스전' : `WAVE ${game.state.wave}`}부터 이어합니다`, 'ok');
 }
 
 function setGameState(state) {
@@ -4313,7 +4903,7 @@ function buildChapterList() {
       `<h3 class="chapter-name">${ch.name}</h3>` +
       `<p class="chapter-desc">${ch.desc}</p>` +
       lines.map((t) => `<p class="chapter-info">${t}</p>`).join('') +
-      (run ? `<p class="chapter-info resume">WAVE ${run.wave}부터 이어하기 · 거점 HP ${run.coreHp}/${maxHp}</p>` : '') +
+      (run ? `<p class="chapter-info resume">${run.bossPrep ? '보스전' : `WAVE ${run.wave}`}부터 이어하기 · 거점 HP ${run.coreHp}/${maxHp}</p>` : '') +
       `<div class="chapter-buttons">${buttons}</div>`;
     list.appendChild(card);
   });
@@ -4335,7 +4925,8 @@ function onChapterListClick(evt) {
 }
 
 function onStartWave() {
-  if (startWave(game.state)) showToast(`WAVE ${game.state.wave} 시작`, 'ok');
+  const boss = game.state.bossPrep;
+  if (startWave(game.state)) showToast(boss ? '보스전 시작' : `WAVE ${game.state.wave} 시작`, 'ok');
 }
 
 function onResultPrimary() {
@@ -4415,6 +5006,10 @@ function setHidden(el, hidden) { if (el.classList.contains('hidden') !== hidden)
 function hintText(st) {
   switch (st.status) {
     case STATUS.PREPARATION:
+      if (st.bossPrep) {
+        const d = findBossData(st.chapterId), sp = GAME_DATA.field.spawnPoints[bossSpawnIndex(d)];
+        return `보스 ${d.name}${josaIGa(d.name)} ${sp.label}쪽 출입구에서 나타납니다. 길목에 그림자를 배치하고 보스전을 시작하세요. 남은 잔영은 지금도 추출할 수 있습니다.`;
+      }
       return `카드를 고르고 전장 빈 곳을 클릭해 기본 그림자를 배치하세요 (최대 ${st.maxBasic}기). 남은 잔영은 지금도 추출할 수 있습니다.`;
     case STATUS.PLAYING:
       return '적을 처치하면 그 자리에 잔영이 남습니다. 잔영을 클릭해 그림자를 추출하세요.';
@@ -4450,12 +5045,25 @@ const ENEMY_ATK_SFX = {
 const EXTRACTED_SFX_OPTS = { pitch: 0.89, dark: true };   // 추출 그림자: 한 음 낮고 고역을 깎음
 // 이름 뒤 조사 '이'/'가' (받침 있으면 '이')
 function josaIGa(word) { const c = word.charCodeAt(word.length - 1) - 0xac00; return c >= 0 && c < 11172 && c % 28 ? '이' : '가'; }
+// 보스 고유 기술이 발동하는 순간의 소리
+const BOSS_SKILL_SFX = { poison: 'poisonSplash', ambush: 'ambushStrike', frenzy: 'frenzyRoar', lightning: 'thunder', dash: 'dashRush', beam: 'beamFire' };
 function playEventSfx(st, ev) {
   const bossName = () => (findBossData(st.chapterId) || {}).name || '보스';
-  if (ev === 'BOSS_APPEAR') { sfx('bossAppear'); showToast(`보스 ${bossName()} 등장!`, 'warn', true); }
+  if (ev === 'BOSS_PREP') {
+    const d = findBossData(st.chapterId), sp = GAME_DATA.field.spawnPoints[bossSpawnIndex(d)];
+    sfx('waveClear');
+    showToast(`보스 ${d.name} 출현 예고 · ${sp.label}쪽 출입구`, 'warn', true);
+  } else if (ev === 'BOSS_APPEAR') { sfx('bossAppear'); showToast(`보스 ${bossName()} 등장!`, 'warn', true); }
   else if (ev === 'BOSS_SUMMON') { sfx('bossSummon'); showToast(`${bossName()}${josaIGa(bossName())} 부하를 불러들였다!`, 'warn', true); }
   else if (ev === 'BOSS_ENRAGE') sfx('bossEnrage');
-  else if (ev === 'BOSS_WARN') sfx('bossWarn');
+  else if (ev.startsWith('BOSS_WARN')) sfx('bossWarn', { dur: parseFloat(ev.split(':')[1]) || 1.5 });   // 기술마다 예고 시간이 다름
+  else if (ev === 'BOSS_VANISH') sfx('ambushVanish');
+  else if (ev === 'BOSS_DEVOUR') sfx('devour');
+  else if (ev.startsWith('BOSS_SKILL:')) {
+    const type = ev.slice(11);
+    sfx(BOSS_SKILL_SFX[type]);
+    if (type === 'frenzy') showToast(`${bossName()}의 광란의 주술! 적 공격·이동 속도 상승`, 'warn', true);
+  }
   else if (ev === 'BOSS_SLAM') sfx('bossSlam');
   else if (ev === 'BOSS_ATK') sfx('bossAttack');
   else if (ev === 'BOSS_KILL') { sfx('bossDie'); showToast(`${bossName()} 처치! (에너지 +${(findBossData(st.chapterId) || {}).reward || 0})`, 'ok'); }
@@ -4552,7 +5160,7 @@ function syncUI() {
   }
 
   setHidden(ui.btnStart, st.status !== STATUS.PREPARATION);
-  setText(ui.btnStart, `WAVE ${st.wave} 시작`);
+  setText(ui.btnStart, st.bossPrep ? '보스전 시작' : `WAVE ${st.wave} 시작`);
   setHidden(ui.btnPause, st.status !== STATUS.PLAYING);   // 웨이브 시작 버튼 자리에 표시
 
   syncExtractPanel(st);
