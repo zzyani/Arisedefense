@@ -4144,6 +4144,7 @@ function onKeyDown(evt) {
   const key = evt.key.toLowerCase();
   if (key === 'd') { game.view.showRanges = !game.view.showRanges; return; }
   if (key === 'p') { togglePause(); return; }
+  if (key === 'm') { toggleBgm(); return; }
   if (key === 'escape') {
     // Esc: 일시정지 중이면 계속하기 → 선택된 것이 있으면 선택 해제 → 전투 중이면 일시정지
     const st = game.state;
@@ -4327,6 +4328,21 @@ function syncUI() {
  *  - requestAnimationFrame 루프는 boot()에서 1번만 시작 (재시작해도 새로 만들지 않음)
  *  - 전투는 1/60초 고정 간격, 화면은 브라우저 프레임마다 그림
  * ================================================================== */
+// 배경 음악: 타이틀·챕터 선택(READY)은 title, 그 밖에는 지금 챕터 곡. 일시정지 중에는 작게 (bgm.js)
+function syncBgm(state) {
+  if (typeof Bgm === 'undefined') return;
+  Bgm.update(state.status === STATUS.READY ? 'title' : 'ch' + state.chapterId, state.status === STATUS.PAUSED);
+}
+function toggleBgm() {
+  if (typeof Bgm === 'undefined') return;
+  const on = Bgm.toggle();
+  const btn = $('btn-bgm');
+  if (!btn) return;
+  btn.textContent = on ? '♪ BGM 켜짐' : '♪ BGM 꺼짐';
+  btn.classList.toggle('off', !on);
+  btn.blur();   // 스페이스·엔터가 버튼을 다시 누르지 않게
+}
+
 function frame(now) {
   if (game.lastTime === null) game.lastTime = now;
   let delta = (now - game.lastTime) / 1000;
@@ -4352,6 +4368,7 @@ function frame(now) {
 
   render(game.ctx, game.state, game.view);
   syncUI();
+  syncBgm(game.state);
   requestAnimationFrame(frame);
 }
 
@@ -4397,6 +4414,11 @@ function boot() {
   game.canvas.addEventListener('mouseleave', onMouseLeave);
   $('app').addEventListener('contextmenu', onSecondaryClick);   // 기본 그림자 위: 회수 / 그 밖: 선택 해제
   $('btn-play').addEventListener('click', goToChapters);
+  const bgmBtn = $('btn-bgm');   // 예전 index.html이 캐시돼 버튼이 없어도 게임은 시작되게
+  if (bgmBtn) {
+    bgmBtn.addEventListener('click', toggleBgm);
+    if (typeof Bgm !== 'undefined' && !Bgm.isEnabled()) { bgmBtn.textContent = '♪ BGM 꺼짐'; bgmBtn.classList.add('off'); }
+  }
   game.ui.chapterList.addEventListener('click', onChapterListClick);
   $('btn-chapters-back').addEventListener('click', goToTitle);
   game.ui.btnStart.addEventListener('click', onStartWave);

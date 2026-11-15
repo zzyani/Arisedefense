@@ -94,6 +94,17 @@ button { font-family: inherit; }
 
 .hud-item small { font-size: 11px; color: var(--sub); margin-left: 4px; }
 
+/* 배경 음악 버튼: HUD 맨 오른쪽. 타이틀·챕터 선택 창(z-index 10) 위에서도 누를 수 있게 */
+.hud-bgm {
+  position: relative;
+  z-index: 11;
+  font-family: inherit;
+  cursor: pointer;
+  color: var(--accent-2);
+}
+.hud-bgm:hover { border-color: var(--line-hi); color: var(--text); }
+.hud-bgm.off { color: var(--sub); opacity: 0.75; }
+
 .hud-status {
   margin-left: auto;
   color: var(--accent-2);
