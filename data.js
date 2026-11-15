@@ -74,11 +74,13 @@ const GAME_DATA = {
   // 적. targetType: 없으면 한 명, all_in_range면 사거리 안 그림자 전부
   //  coreStandoff: 거점에 붙지 않고 이만큼 떨어진 둘레에서 거점을 공격 (원거리형)
   //  moveWhileAttacking: 사거리 안 그림자를 쏘면서도 멈추지 않고 거점 쪽으로 계속 이동 (사거리 밖에서 버티며 웨이브가 늘어지지 않게)
+  //  chapterStats: { 챕터번호: { 값 } } → 그 챕터에서만 위 값을 덮어씀 (예: 6챕터 중장갑형만 원거리)
   //  모습은 챕터마다 바꿀 수 있음 → game.js SPRITES에 'EN_001@ch2' 같은 이름으로 넣으면 그 챕터에서 사용
   enemies: [
     { id: 'EN_001', name: '일반형',   maxHp: 100, attack: 15, moveSpeed: 35, attackInterval: 2.0, attackRange: 45, radius: 14, color: '#d99a3e', attackFx: 'claw' },
     { id: 'EN_002', name: '돌격형',   maxHp: 70,  attack: 12, moveSpeed: 65, attackInterval: 1.5, attackRange: 45, radius: 12, color: '#ff5d73', attackFx: 'ice' },
-    { id: 'EN_003', name: '중장갑형', maxHp: 260, attack: 30, moveSpeed: 20, attackInterval: 2.5, attackRange: 45, radius: 18, color: '#b07a5a', attackFx: 'bite' },
+    { id: 'EN_003', name: '중장갑형', maxHp: 260, attack: 30, moveSpeed: 20, attackInterval: 2.5, attackRange: 45, radius: 18, color: '#b07a5a', attackFx: 'bite',
+      chapterStats: { 6: { attackRange: 110, coreStandoff: 45, moveWhileAttacking: true } } },   // 6챕터(돌 마법사)만 원거리: 마력탄을 쏘며 거점 둘레까지 전진
     { id: 'EN_004', name: '원거리형', maxHp: 75,  attack: 12, moveSpeed: 30, attackInterval: 2.0, attackRange: 120, radius: 13, color: '#e8a33a', attackFx: 'bolt', coreStandoff: 45, moveWhileAttacking: true },   // 챕터 3부터
     { id: 'EN_005', name: '광역형',   maxHp: 200, attack: 16, moveSpeed: 24, attackInterval: 2.4, attackRange: 60,  radius: 17, color: '#d0453c', attackFx: 'blast', targetType: 'all_in_range' },   // 챕터 4부터
     { id: 'EN_006', name: '스피드형', maxHp: 55,  attack: 8,  moveSpeed: 100, attackInterval: 0.8, attackRange: 40, radius: 11, color: '#7fdc5a' },   // 챕터 5부터

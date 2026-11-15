@@ -551,7 +551,8 @@ function spawnPointFor(chapterId, i) {
 }
 
 function createEnemy(state, enemyId, spawnIndex) {
-  const d = findEnemyData(enemyId);
+  const base = findEnemyData(enemyId);
+  const d = { ...base, ...((base.chapterStats || {})[state.chapterId] || {}) };   // 챕터별 덮어쓰기 (예: 6챕터 중장갑형만 원거리)
   const sp = spawnPointFor(state.chapterId, spawnIndex);
   return {
     uid: state.nextUid++,
@@ -1174,7 +1175,7 @@ function checkWaveComplete(state) {
 
 // 공격 연출 (게임 규칙에 영향 없음). style: 없으면 공격 선, 'claw'면 할퀴기 자국
 const LINE_FX_TIME = 0.12;
-const ATTACK_FX_TIME = { claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36, bolt: 0.28, blast: 0.4, breath: 0.55, orb: 0.56, berclaw: 0.28, centclaw: 0.4, iceclaw: 0.42, icewave: 0.4, orcslash: 0.4, spear: 0.42, orcpunch: 0.46, axeslam: 0.42, rockspike: 0.44, hellbite: 0.42, clubslam: 0.44, curse: 0.6, reapwave: 0.5, antslash: 0.36, antclaw: 0.36, antblade: 0.44, acid: 0.42, queenstab: 0.34, crystalburst: 0.56 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
+const ATTACK_FX_TIME = { claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36, bolt: 0.28, blast: 0.4, breath: 0.55, orb: 0.56, berclaw: 0.28, centclaw: 0.4, iceclaw: 0.42, icewave: 0.4, orcslash: 0.4, spear: 0.42, orcpunch: 0.46, axeslam: 0.42, rockspike: 0.44, hellbite: 0.42, clubslam: 0.44, curse: 0.6, reapwave: 0.5, antslash: 0.36, antclaw: 0.36, antblade: 0.44, acid: 0.42, queenstab: 0.34, crystalburst: 0.56, knightslash: 0.4, golemburst: 0.5, stonespell: 0.62, runebolt: 0.6, harpring: 0.62, stoneslash: 0.34 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
 const ORB_IMPACT_TIME = 0.18;   // 마력구가 닿은 뒤 터지며 흩어지는 시간(초)
 function addEffect(state, x1, y1, x2, y2, kind, style) {
   const ttl = ATTACK_FX_TIME[style] || LINE_FX_TIME;
@@ -1459,6 +1460,102 @@ const SPRITES = {
       death:  { row: 4, frames: 5, fps: 8, groundY: 44 },
     },
   },
+  'EN_001@ch6': {   // 6챕터 일반형 (돌 갑옷 기사). 줄마다 몸 무게중심·발끝을 맞춰 88×66 칸 (원본이 작게 그려져 3배 축소), 칼을 뻗은 프레임은 몸 기준
+    src: 'assets/sprites/en_001_ch6.png',
+    cellW: 88, cellH: 66,
+    scale: 1,
+    anchorX: 38,      // 칸 안에서 몸 가운데 x (칼은 앞쪽)
+    bodyTop: 12,      // 걷는 줄의 투구 끝 높이 (HP바 위치)
+    shadow: { w: 17, h: 3, dx: 0 },
+    attackFx: 'knightslash',   // 이 챕터에서만 공격 이펙트도 바꿈 (기본 모습은 데이터의 attackFx 'claw')
+    anims: {
+      idle:   { row: 0, frames: 4, fps: 4, groundY: 64 },
+      walk:   { row: 1, frames: 6, fps: 8, stride: 30, groundY: 64 },   // 걷기 한 바퀴(6프레임)에 30px
+      attack: { row: 2, frames: 5, fps: 10, strikeFrame: 3, strikeHold: 0.15, groundY: 64 },   // 0 자세, 1~2 칼을 머리 위로 치켜듦, 3 앞으로 내려벰(타격, 잠깐 유지), 4 칼끝을 바닥에 댄 채 버팀
+      hit:    { row: 3, frames: 2, fps: 10, groundY: 64 },
+      death:  { row: 4, frames: 5, fps: 8, groundY: 64 },   // 무너져 돌 조각 더미가 됨
+    },
+  },
+  'EN_002@ch6': {   // 6챕터 돌격형 (방패 든 돌 거인). 줄마다 몸 무게중심·발끝을 맞춰 92×60 칸 (원본 3.5배 축소, 일반형 돌 기사와 키를 맞춤), 일반형 돌 기사와 겹치지 않게 푸른 강철빛으로 칠함
+    src: 'assets/sprites/en_002_ch6.png',
+    cellW: 92, cellH: 60,
+    scale: 1,
+    anchorX: 44,      // 칸 안에서 몸 가운데 x (방패는 앞쪽)
+    bodyTop: 8,       // 걷는 줄의 투구 끝 높이 (HP바 위치)
+    shadow: { w: 16, h: 3, dx: 0 },
+    attackFx: 'golemburst',   // 이 챕터에서만 공격 이펙트도 바꿈 (기본 모습은 데이터의 attackFx)
+    anims: {
+      idle:   { row: 0, frames: 4, fps: 4, groundY: 58 },
+      walk:   { row: 1, frames: 6, fps: 8, stride: 30, groundY: 58 },   // 걷기 한 바퀴(6프레임)에 30px
+      attack: { row: 2, frames: 5, fps: 10, strikeFrame: 4, strikeHold: 0.25, groundY: 58 },   // 0 자세, 1 몸을 웅크림, 2~3 뒷다리로 밀며 방패를 내밂, 4 방패로 들이받음(타격, 잠깐 유지)
+      hit:    { row: 3, frames: 2, fps: 10, groundY: 58 },
+      death:  { row: 4, frames: 5, fps: 8, groundY: 58 },   // 금 가며 무너져 돌 더미가 됨
+    },
+  },  'EN_003@ch6': {   // 6챕터 중장갑형 (뾰족 모자 쓴 돌 마법사). 줄마다 몸 무게중심·발끝을 맞춰 84×70 칸 (원본 3.5배 축소), 뻗은 손은 몸 기준으로 앞에
+    src: 'assets/sprites/en_003_ch6.png',
+    cellW: 84, cellH: 70,
+    scale: 1,
+    anchorX: 40,      // 칸 안에서 몸 가운데 x (뻗은 손은 앞쪽)
+    bodyTop: 13,      // 걷는 줄의 모자 끝 높이 (HP바 위치)
+    shadow: { w: 16, h: 3, dx: 0 },
+    attackFx: 'stonespell',   // 이 챕터에서만 공격 이펙트도 바꿈 (기본 모습은 데이터의 attackFx 'bite')
+    anims: {
+      idle:   { row: 0, frames: 4, fps: 4, groundY: 68 },
+      walk:   { row: 1, frames: 6, fps: 8, stride: 24, groundY: 68 },   // 걷기 한 바퀴(6프레임)에 24px (로브 자락이 끌림)
+      attack: { row: 2, frames: 5, fps: 9, strikeFrame: 3, strikeHold: 0.3, groundY: 68 },   // 0 자세, 1~2 손을 들어 앞으로 뻗음, 3 손끝에 마력을 모아 쏨(타격, 잠깐 유지), 4 몸을 숙이며 끝까지 뻗음
+      hit:    { row: 3, frames: 2, fps: 10, groundY: 68 },
+      death:  { row: 4, frames: 5, fps: 8, groundY: 68 },   // 주저앉아 돌 더미로 무너짐
+    },
+  },  'EN_004@ch6': {   // 6챕터 원거리형 (두건 쓴 돌 주술사, 푸른 눈·룬). 줄마다 몸 무게중심·발끝을 맞춰 72×56 칸 (원본 3.8배 축소)
+    src: 'assets/sprites/en_004_ch6.png',
+    cellW: 72, cellH: 56,
+    scale: 1,
+    anchorX: 32,      // 칸 안에서 몸 가운데 x (뻗은 손은 앞쪽)
+    bodyTop: 2,       // 걷는 줄의 두건 끝 높이 (HP바 위치)
+    shadow: { w: 15, h: 3, dx: 0 },
+    attackFx: 'runebolt',   // 이 챕터에서만 공격 이펙트도 바꿈 (기본 모습은 데이터의 attackFx 'bolt')
+    anims: {
+      idle:   { row: 0, frames: 4, fps: 4, groundY: 54 },
+      walk:   { row: 1, frames: 6, fps: 8, stride: 28, groundY: 54 },   // 걷기 한 바퀴(6프레임)에 28px
+      attack: { row: 2, frames: 5, fps: 9, strikeFrame: 2, strikeHold: 0.25, groundY: 54 },   // 0 자세, 1 손을 들어 모음, 2 손을 앞으로 뻗어 쏨(타격, 잠깐 유지), 3 뻗은 채 버팀, 4 복귀
+      hit:    { row: 3, frames: 2, fps: 10, groundY: 54 },
+      death:  { row: 4, frames: 5, fps: 8, groundY: 54 },   // 무너져 돌 더미가 됨
+    },
+  },  'EN_005@ch6': {   // 6챕터 광역형 (하프 켜는 여신 석상). 줄마다 몸 무게중심·발끝을 맞춰 92×58 칸 (원본 3.6배 축소). 돌 마법사와 같은 연보랏빛 회색이라 흰 대리석으로 칠함 (붉은 눈은 그대로)
+    src: 'assets/sprites/en_005_ch6.png',
+    cellW: 92, cellH: 58,
+    scale: 1,
+    anchorX: 44,      // 칸 안에서 몸 가운데 x (하프는 앞쪽)
+    bodyTop: 2,       // 걷는 줄의 머리 끝 높이 (HP바 위치)
+    shadow: { w: 18, h: 3, dx: 0 },
+    attackFx: 'harpring',   // 이 챕터에서만 공격 이펙트도 바꿈 (기본은 데이터의 attackFx 'blast' 폭발 원)
+    anims: {
+      idle:   { row: 0, frames: 4, fps: 4, groundY: 56 },
+      walk:   { row: 1, frames: 6, fps: 6, stride: 24, groundY: 56 },   // 걷기 한 바퀴(6프레임)에 24px (느린 유닛)
+      attack: { row: 2, frames: 5, fps: 8, strikeFrame: 3, strikeHold: 0.3, groundY: 56 },   // 0 자세, 1 하프에 손을 올림, 2 줄을 당김, 3 힘껏 튕김(타격·발밑 고리가 퍼지는 순간, 잠깐 유지), 4 여운
+      hit:    { row: 3, frames: 2, fps: 10, groundY: 56 },
+      death:  { row: 4, frames: 5, fps: 8, groundY: 56 },   // 금 가며 무너져 하프와 함께 돌 더미가 됨
+    },
+  },  'EN_006@ch6': {   // 6챕터 스피드형 (두건 쓴 돌 암살자, 단검 둘). 줄마다 몸 무게중심·발끝을 맞춰 72×50 칸 (원본 4배 축소, 작고 빠른 유닛). 돌 마법사와 같은 연보랏빛 회색이라 사암빛으로 칠함 (붉은 눈은 그대로)
+    src: 'assets/sprites/en_006_ch6.png',
+    cellW: 72, cellH: 50,
+    scale: 1,
+    anchorX: 32,      // 칸 안에서 몸 가운데 x (뻗은 단검은 앞쪽)
+    bodyTop: 5,       // 걷는 줄의 두건 끝 높이 (HP바 위치)
+    shadow: { w: 15, h: 3, dx: 0 },
+    attackFx: 'stoneslash',   // 이 챕터에서만 공격 이펙트도 바꿈 (데이터에는 공격 이펙트가 없음 → 기본은 공격 선)
+    anims: {
+      idle:   { row: 0, frames: 4, fps: 6, groundY: 48 },
+      walk:   { row: 1, frames: 6, fps: 12, stride: 46, groundY: 48 },   // 몸을 낮추고 빠르게 달림, 한 바퀴(6프레임)에 46px
+      attack: { row: 2, frames: 5, fps: 12, strikeFrame: 3, strikeHold: 0.12, groundY: 48 },   // 0 자세, 1~2 단검을 머리 위로 치켜듦, 3 앞으로 뛰어들며 찌름(타격, 잠깐 유지), 4 찌른 채 버팀
+      hit:    { row: 3, frames: 2, fps: 10, groundY: 48 },
+      death:  { row: 4, frames: 5, fps: 9, groundY: 48 },   // 금 가며 무너져 돌 더미가 됨
+    },
+  },
+
+
+
+
   'EN_004@ch3': {   // 3챕터 원거리형 (오크 창병). 줄마다 몸 무게중심·발끝을 맞춰 88×56 칸으로 정렬, 쓰러짐 끝 프레임은 앞으로 쓰러지게
     src: 'assets/sprites/en_004_ch3.png',
     cellW: 88, cellH: 56,
@@ -2757,7 +2854,27 @@ function drawSpearFx(ctx, fx, S = SPEAR_FX) {
   ctx.restore();
   return true;
 }
-const PROJ_FX = { spear: SPEAR_FX, curse: CURSE_FX, acid: ACID_FX };   // 던진 손(입)에서 맞은 쪽까지 날아가는 이펙트
+// 6챕터 중장갑형(돌 마법사) 마력탄 (assets/sprites/fx_stonespell.png, 84×58 도트 5프레임, 원본 6배 축소): 손끝에 빛 구슬이 모이고 초승달 룬이 감싼 뒤
+// 꼬리를 끄는 혜성처럼 날아가 맞은 자리에서 별빛으로 터지고 연기로 흩어짐. 줄 0 원본(적, 푸른빛) · 줄 1 보랏빛(추출 그림자)
+const STONESPELL_FX = {
+  src: 'assets/sprites/fx_stonespell.png', w: 84, h: 58, frames: 5, charge: 0.3, chargeFrames: 2, flyFrames: 1, rows: { enemy: 0, extracted: 1 },
+  originX: 58, originY: 30,   // 칸 안에서 구슬 가운데 = 혜성 머리 = 터지는 빛 가운데
+  handReach: 28,   // 판정 위치에서 바라보는 쪽으로 손끝까지(px) = 쏘는 프레임의 손 (칸 x 67)
+  handLift: 22,    // 판정 위치에서 위로 손 높이(px) = 칸 y 34 (발끝 y 68은 판정 위치 아래 12px)
+  fly: 0.55,       // 재생 시간 중 모이고 날아가는 비율 (나머지는 터지며 흩어짐)
+  glow: { enemy: 'rgba(140, 190, 255, 0.45)', extracted: 'rgba(160, 120, 255, 0.6)' },
+};
+// 6챕터 원거리형(돌 주술사) 룬 탄 (assets/sprites/fx_runebolt.png, 58×36 도트 7프레임, 원본 7배 축소): 손끝에 마름모 빛이 모이고 초승달 고리가 감싼 뒤
+// 꼬리를 끌며 날아가 맞은 자리에서 별빛으로 터지고 조각·연기로 흩어짐. 줄 0 청록빛(적, 원본 남보라를 주술사 눈빛에 맞춰 바꿈) · 줄 1 보랏빛(추출 그림자)
+const RUNEBOLT_FX = {
+  src: 'assets/sprites/fx_runebolt.png', w: 58, h: 36, frames: 7, charge: 0.25, chargeFrames: 2, flyFrames: 2, rows: { enemy: 0, extracted: 1 },
+  originX: 36, originY: 18,   // 칸 안에서 빛 가운데 = 탄 머리 = 터지는 빛 가운데
+  handReach: 23,   // 판정 위치에서 바라보는 쪽으로 손끝까지(px) = 쏘는 프레임의 손 (칸 x 54)
+  handLift: 20,    // 판정 위치에서 위로 손 높이(px) = 칸 y 22 (발끝 y 54는 판정 위치 아래 12px)
+  fly: 0.62,       // 재생 시간 중 모이고 날아가는 비율 (나머지는 터지며 흩어짐)
+  glow: { enemy: 'rgba(80, 230, 240, 0.45)', extracted: 'rgba(160, 120, 255, 0.6)' },
+};
+const PROJ_FX = { spear: SPEAR_FX, curse: CURSE_FX, acid: ACID_FX, stonespell: STONESPELL_FX, runebolt: RUNEBOLT_FX };   // 던진 손(입)에서 맞은 쪽까지 날아가는 이펙트
 // 3챕터 돌격형(붉은 오크 권투사) 주먹 장풍 (assets/sprites/fx_orcpunch.png, 58×40 도트 6프레임, 원본 7배 축소): 붉은 호가 솟구치며 흙먼지·돌 조각이 튐.
 // 줄 0 원본(적) · 줄 1 보랏빛(추출 그림자). 위아래 그대로, 그림 바닥을 발끝 높이에 맞춰 내지른 주먹 앞에서 시작해
 // 장풍처럼 바닥을 따라 앞으로 짧게 밀려 나감 (근접 공격이라 멀리 가지 않음, 판정은 그대로)
@@ -2873,7 +2990,48 @@ const CRYSTALBURST_FX = {
   reach: 18,     // 바라보는 쪽으로 떨어진 거리(px) = 개미 몸 앞쪽을 중심으로 범위에 솟구침
   upright: true, // 위아래 반전 안 함
 };
-const ATTACK_FX = { crystalburst: CRYSTALBURST_FX, queenstab: QUEENSTAB_FX, antblade: ANTBLADE_FX, antclaw: ANTCLAW_FX, antslash: ANTSLASH_FX, reapwave: REAPWAVE_FX, clubslam: CLUBSLAM_FX, hellbite: HELLBITE_FX, rockspike: ROCKSPIKE_FX, axeslam: AXESLAM_FX, orcpunch: ORCPUNCH_FX, orcslash: ORCSLASH_FX, icewave: ICEWAVE_FX, iceclaw: ICECLAW_FX, claw: CLAW_FX, slash: SLASH_FX, ice: ICE_FX, bearclaw: BEARCLAW_FX, slam: SLAM_FX, bite: BITE_FX, berclaw: BERCLAW_FX, centclaw: CENTCLAW_FX };
+// 6챕터 일반형(돌 기사) 푸른 초승달 베기 (assets/sprites/fx_knightslash.png, 64×40 도트 6프레임, 원본 6배 축소): 푸른 초승달 칼자국이 커지며 하얗게 빛났다가 조각으로 흩어짐.
+// 줄 0 원본(적) · 줄 1 보랏빛(추출 그림자). 위아래 그대로, 몸 가운데 높이에서 내려벤 칼 앞에 그림
+const KNIGHTSLASH_FX = {
+  src: 'assets/sprites/fx_knightslash.png', w: 64, h: 40, frames: 6,
+  rows: { enemy: 0, extracted: 1 },
+  glow: { enemy: 'rgba(90, 150, 255, 0.45)', extracted: 'rgba(160, 120, 255, 0.6)' },
+  bodyLift: 12,  // 판정 위치에서 위로(px) = 몸 가운데 높이 (발끝은 아래로 12px)
+  reach: 20,     // 바라보는 쪽으로 떨어진 거리(px) = 칼자국 끝이 칼끝 앞에 오도록
+  upright: true, // 위아래 반전 안 함
+};
+// 6챕터 돌격형(돌 거인) 땅 터짐 (assets/sprites/fx_golemburst.png, 64×62 도트 6프레임, 원본 6배 축소): 바닥이 갈라지고 푸른 빛 가시와 돌덩이가 솟구쳤다가 먼지로 가라앉음.
+// 줄 0 원본(적, 푸른빛) · 줄 1 보랏빛(추출 그림자). 위아래 그대로, 균열 가운데(칸 y 52)를 방패 앞 발끝 높이에 맞춤
+const GOLEMBURST_FX = {
+  src: 'assets/sprites/fx_golemburst.png', w: 64, h: 62, frames: 6,
+  rows: { enemy: 0, extracted: 1 },
+  glow: { enemy: 'rgba(110, 160, 255, 0.45)', extracted: 'rgba(160, 120, 255, 0.6)' },
+  bodyLift: 9,   // 균열 가운데(칸 y 52)가 발끝(판정 위치 +12)에 오도록
+  reach: 36,     // 바라보는 쪽으로 떨어진 거리(px) = 들이받은 방패 바로 앞 바닥
+  upright: true, // 위아래 반전 안 함
+};
+// 6챕터 광역형(하프 석상) 선율 고리 (assets/sprites/fx_harpring.png, 82×80 도트 6프레임, 원본 4배 축소): 발밑에 빛 고리가 깔리고 빛기둥·음표가 솟구쳤다가
+// 바닥이 갈라지며 흩어짐. 줄 0 금빛(적, 원본 남보라를 바꿈) · 줄 1 보랏빛(추출 그림자). 석상 자신의 발밑에 그리고, 석상을 가리지 않게 조금 투명하게
+const HARPRING_FX = {
+  src: 'assets/sprites/fx_harpring.png', w: 82, h: 80, frames: 6,
+  rows: { enemy: 0, extracted: 1 },
+  glow: { enemy: 'rgba(255, 220, 120, 0.4)', extracted: 'rgba(160, 120, 255, 0.6)' },
+  atSelf: true,  // 맞은 쪽이 아니라 공격한 유닛 발밑에 그림
+  bodyLift: 16,  // 고리 가운데(칸 y 68)가 발끝(판정 위치 +12)에 오도록
+  alpha: 0.7,    // 석상을 너무 가리지 않게
+  upright: true, // 위아래 반전 안 함
+};
+// 6챕터 스피드형(돌 암살자) 단검 찌르기 (assets/sprites/fx_stoneslash.png, 56×38 도트 5프레임, 원본 6.5배 축소): 작은 별빛 → 앞으로 뻗는 칼바람 → 하얀 섬광과 돌 조각이 터짐 → 엇갈린 칼자국 → 흩어짐.
+// 줄 0 원본(적, 푸른 흰빛) · 줄 1 보랏빛(추출 그림자). 프레임마다 맞는 점(섬광 가운데·칼바람 끝)을 칸 (36, 18)에 맞춰 찌른 단검 끝에 그림
+const STONESLASH_FX = {
+  src: 'assets/sprites/fx_stoneslash.png', w: 56, h: 38, frames: 5,
+  rows: { enemy: 0, extracted: 1 },
+  glow: { enemy: 'rgba(150, 220, 255, 0.45)', extracted: 'rgba(160, 120, 255, 0.6)' },
+  bodyLift: 7,   // 판정 위치에서 위로(px) = 찌르는 프레임의 단검 끝 높이 (칸 y 28, 발끝 y 48은 판정 위치 아래 12px)
+  reach: 23,     // 바라보는 쪽으로 떨어진 거리(px): 그림 가운데에서 8px 앞이 맞는 점 → 단검 끝(몸에서 31px 앞)에 옴
+  upright: true, // 위아래 반전 안 함
+};
+const ATTACK_FX = { stoneslash: STONESLASH_FX, harpring: HARPRING_FX, golemburst: GOLEMBURST_FX, knightslash: KNIGHTSLASH_FX, crystalburst: CRYSTALBURST_FX, queenstab: QUEENSTAB_FX, antblade: ANTBLADE_FX, antclaw: ANTCLAW_FX, antslash: ANTSLASH_FX, reapwave: REAPWAVE_FX, clubslam: CLUBSLAM_FX, hellbite: HELLBITE_FX, rockspike: ROCKSPIKE_FX, axeslam: AXESLAM_FX, orcpunch: ORCPUNCH_FX, orcslash: ORCSLASH_FX, icewave: ICEWAVE_FX, iceclaw: ICECLAW_FX, claw: CLAW_FX, slash: SLASH_FX, ice: ICE_FX, bearclaw: BEARCLAW_FX, slam: SLAM_FX, bite: BITE_FX, berclaw: BERCLAW_FX, centclaw: CENTCLAW_FX };
 
 // 잔영 (assets/sprites/remnant.png): 보랏빛 그림자 불꽃 6프레임 반복. 파일이 없으면 기존 원형으로 그림
 //  - 바닥 웅덩이를 쓰러진 적의 발밑에 맞춤. 클릭 판정(잔영 위치 반경 16px)은 그대로
@@ -3171,7 +3329,7 @@ function drawCoreSprite(ctx, core, state, C) {
 const CORE_HP_LOW = 50;   // 거점 HP가 이 값 이하면 숫자를 붉게
 
 function loadFxSheets() {
-  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, SLAM_FX, BITE_FX, BERCLAW_FX, CENTCLAW_FX, ICECLAW_FX, ICEWAVE_FX, ORCSLASH_FX, SPEAR_FX, ORCPUNCH_FX, AXESLAM_FX, ROCKSPIKE_FX, HELLBITE_FX, CLUBSLAM_FX, CURSE_FX, REAPWAVE_FX, ANTSLASH_FX, ANTCLAW_FX, ANTBLADE_FX, ACID_FX, QUEENSTAB_FX, CRYSTALBURST_FX, BREATH_FX, ORB_FX, REMNANT_FX, DEMON_WINDOWS, ANT_GLOW, ...Object.values(CORE_SPRITES)]) {
+  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, SLAM_FX, BITE_FX, BERCLAW_FX, CENTCLAW_FX, ICECLAW_FX, ICEWAVE_FX, ORCSLASH_FX, SPEAR_FX, ORCPUNCH_FX, AXESLAM_FX, ROCKSPIKE_FX, HELLBITE_FX, CLUBSLAM_FX, CURSE_FX, REAPWAVE_FX, ANTSLASH_FX, ANTCLAW_FX, ANTBLADE_FX, ACID_FX, QUEENSTAB_FX, CRYSTALBURST_FX, KNIGHTSLASH_FX, GOLEMBURST_FX, STONESPELL_FX, RUNEBOLT_FX, HARPRING_FX, STONESLASH_FX, BREATH_FX, ORB_FX, REMNANT_FX, DEMON_WINDOWS, ANT_GLOW, ...Object.values(CORE_SPRITES)]) {
     const img = new Image();
     img.onload = () => { fx.img = fx.shade ? buildTintedSheet(img, fx.shade) : img; };
     img.onerror = () => console.warn(`[이펙트 불러오기 실패] ${fx.src}`);
@@ -3250,12 +3408,14 @@ function drawAttackFx(ctx, fx) {
     ey = fx.y1;
     if (S.travel) ex += dir * S.travel * (1 - (1 - p) * (1 - p));   // 장풍처럼 앞으로 밀려 나감 (처음 빠르고 점점 느려짐)
   }
+  if (S.atSelf) { ex = fx.x1; ey = fx.y1; }   // 공격한 유닛 자신의 발밑 (광역 고리)
   const x = Math.round(ex * k) / k;
   const y = Math.round((ey - S.bodyLift) * k) / k;
   ctx.save();
   ctx.imageSmoothingEnabled = false;
   ctx.shadowColor = S.glow[fx.kind] || Object.values(S.glow)[0];   // 어두운 바닥에서도 보이도록 옅은 빛
   ctx.shadowBlur = 6;
+  if (S.alpha) ctx.globalAlpha *= S.alpha;   // 반투명 (유닛을 가리지 않게)
   ctx.translate(x, y);
   ctx.scale(S.mirror ? -dir : dir, S.upright ? 1 : -1);   // 위아래 반전: 위→아래로 긋는 모양 (mirror면 좌우도 반대로, upright면 위아래 그대로)
   ctx.drawImage(S.img, frame * S.w, row * S.h, S.w, S.h, -S.w / 2, -S.h / 2, S.w, S.h);
