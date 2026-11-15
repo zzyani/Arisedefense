@@ -10,18 +10,24 @@
  *
  * 사용: Bgm.update(곡 이름, 일시정지 여부)를 매 프레임 호출 → 곡이 바뀌면 1.2초 동안 교차 페이드.
  * 브라우저 정책상 첫 클릭·키 입력 뒤에 소리가 남. M 키·BGM 버튼으로 켜고 끔(이 브라우저에 저장).
+ * 효과음: Bgm.sfx(이름) — 효과음 리스트 36종(보스 7종은 보스 구현 때). BGM과 따로 켜고 끔(N 키·효과음 버튼)
  * 나중에 실제 음악 파일로 바꾸려면 TRACKS 대신 <audio>를 재생하도록 play()만 바꾸면 됨.
  * ================================================================== */
 const Bgm = (() => {
   const PREF_KEY = 'arise-defense-bgm';   // 'off'면 꺼짐
+  const SFX_PREF_KEY = 'arise-defense-sfx';   // 효과음 켜기/끄기 (BGM과 따로 저장)
   const VOLUME = 0.5;                     // 전체 음량
   const DUCK = 0.35;                      // 일시정지 중 음량 비율
   const FADE = 1.2;                       // 곡 전환 페이드(초)
+  const SFX_VOLUME = 0.5;                 // 버튼 효과음 음량 (BGM 켜기/끄기와 상관없음)
 
-  let ctx = null, master = null, reverb = null, noiseBuf = null, timer = null;
+  let ctx = null, master = null, reverb = null, noiseBuf = null, timer = null, sfxOut = null, sfxRev = null;
+  let sfxOn = true, silenced = false, duckUntil = 0;   // 효과음 켜짐 · 패배 때 BGM 끔 · 경보 때 잠깐 낮춤
+  const recent = {}; let voices = [];                 // 같은 소리 0.06초 제한 · 동시 6개 제한
   let enabled = true, unlocked = false, wanted = null, paused = false;
   let cur = null;   // 지금 곡 { name, track, dry, wet, barIdx, nextBar }
   try { enabled = localStorage.getItem(PREF_KEY) !== 'off'; } catch (e) { /* 저장소 막힘: 켜짐 */ }
+  try { sfxOn = localStorage.getItem(SFX_PREF_KEY) !== 'off'; } catch (e) { /* 저장소 막힘: 켜짐 */ }
 
   /* ---------- 기본 도구 ---------- */
   const NAMES = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
@@ -65,8 +71,169 @@ const Bgm = (() => {
     if (!AC) return false;
     const c = new AC();
     buildGraph(c, c.destination);
+    // 효과음 출력: 배경 음악과 따로 (BGM을 꺼도 들림). 짧은 디지털 메아리를 더해 시스템 창 느낌으로
+    sfxOut = ctx.createGain(); sfxOut.gain.value = SFX_VOLUME;
+    const echo = ctx.createDelay(0.3), fb = ctx.createGain(), wetE = ctx.createGain();
+    echo.delayTime.value = 0.075; fb.gain.value = 0.28; wetE.gain.value = 0.32;
+    sfxOut.connect(ctx.destination); sfxOut.connect(echo); echo.connect(fb); fb.connect(echo); echo.connect(wetE); wetE.connect(ctx.destination);
+    sfxRev = ctx.createConvolver(); sfxRev.buffer = makeImpulse(2.4, 2.6);   // 큰 소리(일어나라·승리 등)용 잔향
+    const rg = ctx.createGain(); rg.gain.value = SFX_VOLUME * 0.7; sfxRev.connect(rg); rg.connect(ctx.destination);
     timer = setInterval(tick, 60);
     return true;
+  }
+
+  /* ---------- 효과음 ---------- */
+  // 모든 효과음은 sfxOut(짧은 디지털 메아리)로, rev>0이면 sfxRev(잔향)에도 보냄
+  function sfxDest(node, rev) {
+    node.connect(sfxOut);
+    if (rev > 0) { const s2 = ctx.createGain(); s2.gain.value = rev; node.connect(s2); s2.connect(sfxRev); }
+  }
+  // 사각파 '삑' 하나: f0에서 f1로 짧게 미끄러짐 (시스템 창 전자음)
+  function blip(t, f0, f1, dur, v, type = 'square') {
+    const o = ctx.createOscillator(); o.type = type;
+    o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+    const lp = filt('lowpass', 5200, 0.7), g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(v, t + 0.004);
+    g.gain.setValueAtTime(v, t + dur * 0.6); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(lp); lp.connect(g); g.connect(sfxOut); o.start(t); o.stop(t + dur + 0.02);
+  }
+  function shimmer(t, f, dur, v, rev = 0) {   // 맑은 사인 여운
+    const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f;
+    const g = ctx.createGain(); g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); sfxDest(g, rev); o.start(t); o.stop(t + dur + 0.02);
+  }
+  // 음 하나: 파형·음높이 미끄럼·저역 통과·잔향
+  function tone(t, type, f0, f1, dur, v, o = {}) {
+    const os = ctx.createOscillator(); os.type = type;
+    os.frequency.setValueAtTime(f0, t); os.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
+    const lp = filt('lowpass', o.lp ?? 6000, 0.7), g = ctx.createGain(), a = o.attack ?? 0.005;
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(v, t + a);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    os.connect(lp); lp.connect(g); sfxDest(g, o.rev ?? 0); os.start(t); os.stop(t + dur + 0.05);
+  }
+  // 잡음 한 번: 필터 종류·주파수가 f0→f1로 움직임
+  function nz(t, dur, v, o = {}) {
+    const src = noise(t, t + dur), f = filt(o.type || 'bandpass', o.f0 ?? 1200, o.q ?? 1);
+    f.frequency.setValueAtTime(o.f0 ?? 1200, t);
+    if (o.f1) f.frequency.exponentialRampToValueAtTime(o.f1, t + dur);
+    const g = ctx.createGain(), a = o.attack ?? 0.003;
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(v, t + a);
+    if (o.hold) g.gain.setValueAtTime(v, t + o.hold);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f); f.connect(g); sfxDest(g, o.rev ?? 0);
+  }
+  function fmBell(t, f, dur, v, ratio = 3.5, index = 2, rev = 0.3) {
+    const car = ctx.createOscillator(), mod = ctx.createOscillator(); car.type = mod.type = 'sine';
+    car.frequency.value = f; mod.frequency.value = f * ratio;
+    const mg = ctx.createGain(); mg.gain.setValueAtTime(f * index, t); mg.gain.exponentialRampToValueAtTime(f * 0.05, t + dur * 0.6);
+    mod.connect(mg); mg.connect(car.frequency);
+    const g = ctx.createGain(); g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    car.connect(g); sfxDest(g, rev); car.start(t); mod.start(t); car.stop(t + dur + 0.05); mod.stop(t + dur + 0.05);
+  }
+  function padChord(t, freqs, dur, v, o = {}) {   // 톱니파 화음 (합창·현 느낌), 음높이가 bend배로 미끄러질 수 있음
+    const lp = filt('lowpass', o.lp ?? 1800, 0.7), g = ctx.createGain(), a = o.attack ?? 0.05;
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(v, t + a);
+    g.gain.setValueAtTime(v, t + dur * 0.5); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    lp.connect(g); sfxDest(g, o.rev ?? 0.5);
+    for (const f of freqs) for (const dt of [-8, 8]) {
+      const os = ctx.createOscillator(); os.type = 'sawtooth'; os.detune.value = dt;
+      os.frequency.setValueAtTime(f, t); if (o.bend) os.frequency.exponentialRampToValueAtTime(f * o.bend, t + dur);
+      os.connect(lp); os.start(t); os.stop(t + dur + 0.05);
+    }
+  }
+  const midiHz = (m) => 440 * Math.pow(2, (m - 69) / 12);
+  // 챕터 곡의 으뜸음 (일어나라 화음을 같은 조성으로)
+  const TRACK_ROOT = { title: 50, ch1: 57, ch2: 52, ch3: 48, ch4: 50, ch5: 54, ch6: 57 };
+
+  // 효과음 목록. p = 우선순위(0 높음, 2 낮음) · o.pitch = 음높이 배율 · o.dark = 고역을 깎음 (추출 그림자용)
+  const SFX = {
+    // ---- UI·시스템 ----
+    confirm: { p: 0, f(t) { blip(t, 1046, 1060, 0.05, 0.13); blip(t + 0.055, 1568, 1580, 0.09, 0.13); shimmer(t + 0.055, 3136, 0.35, 0.05); } },   // U01
+    back:    { p: 0, f(t) { blip(t, 988, 659, 0.07, 0.12); } },                                             // U02
+    warn:    { p: 0, f(t) { blip(t, 523, 523, 0.06, 0.12); blip(t + 0.09, 523, 494, 0.07, 0.12); } },       // U03
+    select:  { p: 0, f(t) { tone(t, 'sine', 1760, 1760, 0.06, 0.11); } },                                   // U04 카드 선택
+    panel:   { p: 2, f(t) { tone(t, 'sine', 880, 900, 0.1, 0.08, { attack: 0.012 }); } },                   // U05 상세 패널
+    pause:   { p: 1, f(t) { blip(t, 880, 880, 0.05, 0.11); blip(t + 0.065, 587, 587, 0.045, 0.11); } },     // U06 일시정지 (끝을 짧게)
+    resume:  { p: 1, f(t) { blip(t, 587, 587, 0.05, 0.11); blip(t + 0.065, 880, 880, 0.07, 0.11); } },     // U07 전투 재개
+    // ---- 게임 흐름 ----
+    waveClear: { p: 0, f(t) { [1046, 1318, 1568].forEach((f, i) => fmBell(t + i * 0.09, f, 0.7, 0.12, 4, 1.2, 0.4)); shimmer(t + 0.18, 3136, 0.6, 0.04, 0.4); } },   // F02
+    victory: { p: 0, f(t) {   // F03: F02를 길게 + 합창 화음
+      [523, 659, 784, 1046, 1318].forEach((f, i) => fmBell(t + i * 0.12, f, 1.1, 0.12, 4, 1.2, 0.5));
+      padChord(t + 0.45, [523, 659, 784], 1.7, 0.05, { attack: 0.4, lp: 2400, rev: 0.8 });
+      shimmer(t + 0.6, 2093, 1.2, 0.04, 0.6);
+    } },
+    defeat: { p: 0, f(t) {    // F04: 내려가는 단조 화음 + 낮은 울림
+      padChord(t, [294, 349, 440], 1.9, 0.06, { attack: 0.03, bend: 0.84, lp: 1400, rev: 0.7 });
+      tone(t, 'sine', 70, 40, 2.0, 0.22, { rev: 0.5 });
+      nz(t, 1.2, 0.05, { type: 'lowpass', f0: 600, f1: 120, rev: 0.6 });
+    } },
+    cardUnlock: { p: 1, f(t) {   // F05: 반짝이는 글로켄 + 낮은 그림자 울림
+      [2093, 2637, 3136, 4186].forEach((f, i) => fmBell(t + i * 0.07, f, 0.9, 0.07, 3.5, 1, 0.6));
+      tone(t, 'sine', 65, 55, 1.4, 0.14, { attack: 0.25, rev: 0.6 });
+      nz(t, 1.0, 0.04, { type: 'lowpass', f0: 300, f1: 900, attack: 0.3, rev: 0.5 });
+    } },
+    // ---- 그림자 군단 ----
+    summon:  { p: 0, f(t) { nz(t, 0.3, 0.12, { type: 'lowpass', f0: 180, f1: 2200, attack: 0.15, rev: 0.3 }); tone(t + 0.18, 'sine', 130, 48, 0.25, 0.22); } },   // A01
+    recall:  { p: 0, f(t) { nz(t, 0.3, 0.12, { type: 'lowpass', f0: 2200, f1: 150, rev: 0.2 }); tone(t, 'sine', 70, 140, 0.18, 0.1); } },                       // A02
+    dismantle: { p: 0, f(t) { nz(t, 0.4, 0.25, { f0: 1500, f1: 500, q: 0.7, rev: 0.3 }); blip(t + 0.12, 1975, 1975, 0.05, 0.08); blip(t + 0.18, 2637, 2637, 0.09, 0.08); } },   // A03
+    remnant: { p: 0, f(t) { tone(t, 'sine', 233, 175, 0.3, 0.06, { lp: 900, rev: 0.4 }); fmBell(t, 466, 0.4, 0.02, 1.5, 1.5, 0.4); } },   // A04 (작게)
+    remnantGone: { p: 1, f(t) { tone(t, 'sine', 330, 110, 0.45, 0.09, { lp: 800, rev: 0.3 }); } },   // A05
+    arise: { p: 0, f(t, o) {   // A06 "일어나라": 낮은 드론이 0.3초 솟구치다 터지는 화음 + 합창, 강한 잔향
+      const r = midiHz((TRACK_ROOT[o.track] ?? 50) - 12);   // 으뜸음 (낮은 옥타브)
+      const lp = filt('lowpass', 200, 2), g = ctx.createGain();
+      lp.frequency.setValueAtTime(200, t); lp.frequency.exponentialRampToValueAtTime(3200, t + 0.3);
+      g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.12, t + 0.3); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.55);
+      lp.connect(g); sfxDest(g, 0.4);
+      for (const f of [r, r * 1.5]) { const os = ctx.createOscillator(); os.type = 'sawtooth'; os.frequency.setValueAtTime(f, t); os.frequency.exponentialRampToValueAtTime(f * 2, t + 0.3); os.connect(lp); os.start(t); os.stop(t + 0.6); }
+      nz(t, 0.32, 0.06, { type: 'bandpass', f0: 300, f1: 3000, attack: 0.28, q: 0.8 });
+      const b = t + 0.3;   // 터지는 순간
+      padChord(b, [r * 2, r * 2 * 1.189, r * 3, r * 4, r * 4 * 1.189], 1.8, 0.06, { attack: 0.01, lp: 3000, rev: 1 });   // 단조 화음
+      tone(b, 'sine', 110, 38, 0.9, 0.3, { rev: 0.6 });
+      nz(b, 0.5, 0.08, { type: 'lowpass', f0: 4000, f1: 300, rev: 0.8 });
+      fmBell(b, r * 8, 1.6, 0.05, 3.5, 1.5, 0.9);
+    } },
+    shadowDie: { p: 1, f(t) { nz(t, 0.5, 0.2, { f0: 900, f1: 250, q: 0.6, rev: 0.3 }); tone(t, 'sine', 440, 150, 0.4, 0.06); } },   // A07
+    // ---- 그림자 공격 ----
+    slam:    { p: 1, f(t) { tone(t, 'sine', 95, 38, 0.28, 0.14); nz(t, 0.07, 0.06, { type: 'highpass', f0: 3000 }); nz(t, 0.12, 0.04, { f0: 2400, q: 8 }); } },   // S01
+    slash:   { p: 1, f(t) { nz(t, 0.13, 0.5, { f0: 1800, f1: 6500, q: 2 }); } },                                   // S02
+    bearclaw: { p: 1, f(t) { nz(t, 0.08, 0.35, { f0: 1200, q: 1.2 }); nz(t + 0.09, 0.08, 0.35, { f0: 1000, q: 1.2 }); tone(t, 'sawtooth', 75, 60, 0.28, 0.05, { lp: 320 }); } },   // S03
+    orb:     { p: 1, f(t) { tone(t, 'sine', 500, 1400, 0.22, 0.12, { attack: 0.02, rev: 0.2 }); } },               // S04 발사
+    orbHit:  { p: 2, f(t) { nz(t, 0.25, 0.1, { type: 'lowpass', f0: 1400, f1: 200, rev: 0.5 }); tone(t, 'sine', 170, 60, 0.22, 0.12); } },   // S05 착탄
+    breath:  { p: 1, f(t) {   // S06: 0.5초 바람, 필터가 열렸다 닫힘
+      const src = noise(t, t + 0.6), f = filt('bandpass', 400, 0.9), g = ctx.createGain();
+      f.frequency.setValueAtTime(400, t); f.frequency.exponentialRampToValueAtTime(1800, t + 0.25); f.frequency.exponentialRampToValueAtTime(500, t + 0.55);
+      g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.22, t + 0.1); g.gain.setValueAtTime(0.22, t + 0.35); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.58);
+      src.connect(f); f.connect(g); sfxDest(g, 0.3);
+    } },
+    berclaw: { p: 1, f(t) { nz(t, 0.035, 0.05, { type: 'highpass', f0: 5000 }); } },                           // S07 (가장 작게)
+    // ---- 적 (o.pitch·o.dark: 추출 그림자가 쓰면 한 음 낮고 어둡게) ----
+    spawn:   { p: 2, f(t) { nz(t, 0.22, 0.08, { f0: 700, q: 1.5, rev: 0.5 }); tone(t, 'sine', 90, 60, 0.2, 0.04, { rev: 0.4 }); } },   // E01 (멀리서)
+    eClaw:   { p: 1, f(t, o) { nz(t, 0.07, 0.4, { f0: 1100 * o.pitch, q: 1.5, ...(o.dark ? { type: 'lowpass', f0: 900 * o.pitch } : {}) }); } },   // E02
+    eSlash:  { p: 1, f(t, o) { nz(t, 0.12, 0.35, { f0: 900 * o.pitch, f1: (o.dark ? 1600 : 2500) * o.pitch, q: 2 }); } },   // E03
+    eSlam:   { p: 1, f(t, o) { tone(t, 'sine', 80 * o.pitch, 38, 0.22, 0.1); nz(t, 0.22, 0.06, { type: 'lowpass', f0: (o.dark ? 900 : 1500) * o.pitch, f1: 300 }); } },   // E04
+    eShotMagic: { p: 1, f(t, o) { tone(t, 'sine', 900 * o.pitch, 1600 * o.pitch, 0.15, 0.09, { lp: o.dark ? 1800 : 6000 }); } },   // E05 마법 계열
+    eShotPhys:  { p: 1, f(t, o) { nz(t, 0.12, 0.35, { f0: 2000 * o.pitch, f1: (o.dark ? 2400 : 3500) * o.pitch, q: 3 }); } },    // E05 물리 계열
+    eBlast:  { p: 1, f(t, o) { nz(t, 0.42, 0.08, { type: 'lowpass', f0: (o.dark ? 1800 : 3000) * o.pitch, f1: 300, rev: 0.3 }); tone(t, 'sine', 72 * o.pitch, 45, 0.32, 0.07); } },   // E06
+    eStab:   { p: 2, f(t, o) { nz(t, 0.045, 0.06, { type: o.dark ? 'bandpass' : 'highpass', f0: 2600 * o.pitch, q: 1 }); tone(t, 'square', 1200 * o.pitch, 900, 0.02, 0.02); } },   // E07
+    eHit:    { p: 1, f(t) { nz(t, 0.05, 0.035, { type: 'lowpass', f0: 900 }); tone(t, 'sine', 150, 90, 0.05, 0.035); } },   // E08 (매우 작게)
+    eDie:    { p: 0, f(t) { nz(t, 0.3, 0.2, { f0: 1500, f1: 320, q: 1.2 }); blip(t + 0.08, 1318, 1760, 0.06, 0.05, 'sine'); } },   // E09 + 에너지 획득음
+    // ---- 거점 ----
+    coreHit: { p: 0, f(t) { fmBell(t, 2400, 0.18, 0.06, 2.7, 3, 0.2); nz(t, 0.05, 0.05, { type: 'highpass', f0: 4200 }); tone(t, 'sine', 72, 50, 0.32, 0.12); } },   // C01
+    coreDanger: { p: 0, f(t) { for (let i = 0; i < 2; i++) { blip(t + i * 0.42, 988, 988, 0.18, 0.14); blip(t + i * 0.42 + 0.2, 740, 740, 0.18, 0.14); } } },   // C02 (높은 음-낮은 음 2회)
+  };
+  // 확인용: 효과음 하나를 소리 없이 렌더해 AudioBuffer로 돌려줌 (음량 맞추기용)
+  async function renderSfxOffline(name, opts = {}, sec = 2.5) {
+    const saved = [ctx, sfxOut, sfxRev, noiseBuf];
+    const off = new OfflineAudioContext(2, Math.ceil(44100 * sec), 44100);
+    ctx = off;
+    noiseBuf = off.createBuffer(1, 44100 * 2, 44100);
+    const nd = noiseBuf.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+    sfxOut = off.createGain(); sfxOut.gain.value = SFX_VOLUME; sfxOut.connect(off.destination);
+    sfxRev = off.createConvolver(); sfxRev.buffer = makeImpulse(2.4, 2.6);
+    const rg = off.createGain(); rg.gain.value = SFX_VOLUME * 0.7; sfxRev.connect(rg); rg.connect(off.destination);
+    SFX[name].f(0.01, { pitch: 1, dark: false, ...opts });
+    [ctx, sfxOut, sfxRev, noiseBuf] = saved;
+    return off.startRendering();
   }
 
   // 확인용: 곡 하나를 sec초 동안 소리 없이 렌더해 AudioBuffer로 돌려줌 (음량 맞추기·미리 듣기 파일용)
@@ -439,9 +606,9 @@ const Bgm = (() => {
 
   function applyVolume() {
     if (!ctx) return;
-    const t = ctx.currentTime, target = enabled ? VOLUME * (paused ? DUCK : 1) : 0.0001;
+    const t = ctx.currentTime, target = enabled && !silenced ? VOLUME * (paused ? DUCK : 1) * (performance.now() < duckUntil ? 0.4 : 1) : 0.0001;
     master.gain.cancelScheduledValues(t); master.gain.setValueAtTime(master.gain.value, t);
-    master.gain.linearRampToValueAtTime(target, t + 0.4);
+    master.gain.linearRampToValueAtTime(target, t + (silenced ? 1.5 : 0.4));   // 패배 때는 1.5초 동안 사라짐
   }
 
   // 첫 클릭·키 입력 때 오디오 시작 (브라우저 자동 재생 정책)
@@ -459,10 +626,10 @@ const Bgm = (() => {
   });
 
   return {
-    // 매 프레임: 지금 화면에 맞는 곡 이름과 일시정지 여부
-    update(name, isPaused) {
+    // 매 프레임: 지금 화면에 맞는 곡 이름, 일시정지 여부, 음악을 끌지(패배 화면)
+    update(name, isPaused, isSilenced = false) {
       wanted = name;
-      if (isPaused !== paused) { paused = isPaused; applyVolume(); }
+      if (isPaused !== paused || isSilenced !== silenced) { paused = isPaused; silenced = isSilenced; applyVolume(); }
       if (unlocked && (!cur || cur.name !== name)) startTrack(name);
     },
     toggle() {
@@ -471,9 +638,40 @@ const Bgm = (() => {
       applyVolume();
       return enabled;
     },
+    // 효과음 켜기/끄기 (BGM과 따로 저장). 켜면 확인음으로 알림
+    toggleSfx() {
+      sfxOn = !sfxOn;
+      try { localStorage.setItem(SFX_PREF_KEY, sfxOn ? 'on' : 'off'); } catch (e) { /* 저장 실패는 무시 */ }
+      if (sfxOn) this.sfx('confirm');
+      return sfxOn;
+    },
+    isSfxEnabled: () => sfxOn,
+    // BGM을 ms 동안 낮춤 (거점 위험 경고)
+    duck(ms) { duckUntil = performance.now() + ms; applyVolume(); setTimeout(applyVolume, ms + 20); },
+    // 효과음: 이름은 SFX 목록. opts.pitch(음높이 배율)·opts.dark(고역 깎기)·opts.track(일어나라 조성)
+    //  같은 소리는 0.06초 안에 한 번만, 동시에 6개까지 (넘으면 우선순위가 낮은 소리부터 건너뜀)
+    sfx(name, opts = {}) {
+      if (!sfxOn) return;
+      unlock();
+      const def = SFX[name];
+      if (!ctx || !def) return;
+      if (ctx.state !== 'running') ctx.resume();
+      const now = ctx.currentTime;
+      if (recent[name] !== undefined && now - recent[name] < 0.06) return;
+      voices = voices.filter((v) => v.end > now);
+      if (voices.length >= 6) {
+        const worst = Math.max(...voices.map((v) => v.p));
+        if (def.p >= worst) return;   // 지금 울리는 소리보다 중요하지 않으면 건너뜀
+      }
+      recent[name] = now;
+      voices.push({ end: now + 0.25, p: def.p });
+      def.f(now + 0.005, { pitch: 1, dark: false, ...opts });
+    },
     isEnabled: () => enabled,
     current: () => (cur ? cur.name : null),
     tracks: () => Object.keys(TRACKS),
     renderOffline,
+    renderSfxOffline,
+    sfxNames: () => Object.keys(SFX),
   };
 })();

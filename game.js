@@ -448,6 +448,7 @@ function dismantleShadow(state, unitUid) {
 
 function createRemnant(state, enemy) {
   const duration = GAME_DATA.extraction.remnantDuration;
+  state.events.push('REMNANT');   // 효과음용
   state.remnants.push({
     uid: state.nextUid++,
     sourceEnemyId: enemy.typeId,
@@ -686,7 +687,7 @@ function goToNextWave(state) {
  *  - 패배하거나 챕터를 클리어하면 그 챕터의 이어하기는 지워짐 (도중에 나가면 마지막 클리어 웨이브부터) */
 const SAVE_VERSION = 1;
 
-function createEmptySave() { return { version: SAVE_VERSION, cleared: {}, resume: {} }; }
+function createEmptySave() { return { version: SAVE_VERSION, cleared: {}, resume: {}, carry: null }; }   // carry: 다음 챕터로 이어받을 거점 HP { to, hp }
 
 function isNum(v) { return typeof v === 'number' && Number.isFinite(v); }
 
@@ -704,6 +705,8 @@ function normalizeSave(raw) {
     const r = raw.resume && raw.resume[id];
     if (isValidRun(r, ch)) save.resume[id] = r;
   }
+  const cy = raw.carry;   // 챕터 클리어 뒤 아직 시작하지 않은 다음 챕터의 거점 HP
+  if (cy && GAME_DATA.chapters.some((c) => c.chapterId === cy.to) && isNum(cy.hp) && cy.hp > 0) save.carry = { to: cy.to, hp: cy.hp };
   return save;
 }
 
@@ -831,6 +834,7 @@ function updateGame(state, dt) {
   }
   for (const enemy of killed) {           // 7. 처치 보상 + 잔영 생성 (사망 1회당 1번)
     state.stats.kills += 1;
+    state.events.push('KILL');   // 효과음용
     state.stats.waveKills += 1;
     addEnergy(state, GAME_DATA.config.killReward);
     if (Math.random() < GAME_DATA.extraction.remnantChance) createRemnant(state, enemy);
@@ -1027,6 +1031,7 @@ function processShadowAttacks(state) {
       if (t && t.alive) {
         if (applyDamage(t, h.dmg)) killed.push(t);
         t.hitAt = state.elapsed;
+        state.events.push('ORB_HIT', 'ENEMY_HIT');   // 효과음용: 마력구가 닿음
       }
       return false;
     });
@@ -1046,6 +1051,7 @@ function processShadowAttacks(state) {
       else {
         if (applyDamage(t, dmg)) killed.push(t);
         t.hitAt = state.elapsed;   // 피격 애니메이션용
+        state.events.push('ENEMY_HIT');   // 효과음용
       }
       // 이펙트 그림은 유닛 앞에 1번만 (범위 공격이라도 겹쳐 그리지 않음). 이펙트가 없으면 대상마다 공격 선
       if (!fxStyle || ti === 0) {
@@ -1059,6 +1065,7 @@ function processShadowAttacks(state) {
     });
     u.attackAt = state.elapsed;
     u.cooldown = u.attackInterval;
+    state.events.push(`SHADOW_ATK:${fxStyle || ''}`);   // 효과음용: 기본 그림자 공격 (이펙트 종류)
   }
   // 추출 그림자: ATTACK 상태일 때 추격 대상 공격
   for (const s of state.extractedUnits) {
@@ -1073,10 +1080,12 @@ function processShadowAttacks(state) {
     for (const e of hits) {
       if (applyDamage(e, dmg)) killed.push(e);   // 추출 그림자의 처치도 잔영 생성
       e.hitAt = state.elapsed;
+      state.events.push('ENEMY_HIT');
     }
     s.attackAt = state.elapsed;   // 공격 애니메이션용
     faceToward(s, t.x);           // 그림 방향(표시 전용): 공격하는 적 쪽
     const fx = addEffect(state, s.x, s.y, t.x, t.y, 'extracted', enemyFxStyle(s.sourceEnemyId, state.chapterId));
+    state.events.push(`EXTRACTED_ATK:${fx.style || ''}`);   // 효과음용: 원본 적의 공격 (낮고 어둡게)
     fx.facing = s.facing;
     fx.radius = s.attackRange;
     s.cooldown = s.attackInterval;
@@ -1101,6 +1110,7 @@ function processEnemyAttacks(state) {
       const d = dist(e.x, e.y, core.x, core.y) || 1;
       const hx = core.x + (e.x - core.x) / d * core.radius * 0.7, hy = core.y + (e.y - core.y) / d * core.radius * 0.7;
       const cfx = addEffect(state, e.x, e.y, hx, hy, 'enemy', enemyFxStyle(e.typeId, state.chapterId));
+      state.events.push(`ENEMY_ATK:${cfx.style || ''}`, 'CORE_HIT');   // 효과음용: 거점 피격
       cfx.facing = e.facing;
       cfx.radius = e.attackRange;
       e.cooldown = e.attackInterval;
@@ -1112,11 +1122,12 @@ function processEnemyAttacks(state) {
     for (const t of hits) {
       const died = applyDamage(t, dmg);
       t.hitAt = state.elapsed;
-      if (died) addCorpse(state, t);   // 그림자 사망 연출 (스프라이트가 있는 유닛만 그려짐)
+      if (died) { addCorpse(state, t); state.events.push('SHADOW_DIED'); }   // 그림자 사망 연출 (스프라이트가 있는 유닛만 그려짐) + 효과음
     }
     faceToward(e, target.x);
     e.attackAt = state.elapsed;   // 공격 애니메이션용
     const fx = addEffect(state, e.x, e.y, target.x, target.y, 'enemy', enemyFxStyle(e.typeId, state.chapterId));
+    state.events.push(`ENEMY_ATK:${fx.style || ''}`);   // 효과음용
     fx.facing = e.facing;
     fx.radius = e.attackRange;
     e.cooldown = e.attackInterval;
@@ -3811,18 +3822,25 @@ function onStatusChanged(st) {
   if (st.status === STATUS.WAVE_CLEAR) {
     game.save.resume[st.chapterId] = serializeRun(st);
     persistSave();
+    sfx('waveClear');   // F02
   } else if (st.status === STATUS.VICTORY) {
     game.clearInfo = recordChapterClear(game.save, st);
+    const next = getNextChapter(st.chapterId);   // 다음 챕터를 새로 시작하면 남은 거점 HP를 이어받음 (newGame)
+    game.save.carry = next ? { to: next.chapterId, hp: st.coreHp } : null;
     persistSave();
+    sfx('victory');     // F03
+    if (game.clearInfo && game.clearInfo.unlockedCards && game.clearInfo.unlockedCards.length) setTimeout(() => sfx('cardUnlock'), 1700);   // F05: 승리음 뒤에
   } else if (st.status === STATUS.DEFEAT) {
     delete game.save.resume[st.chapterId];
     persistSave();
+    sfx('defeat');      // F04 (BGM은 syncBgm에서 사라짐)
   }
 }
 
 function $(id) { return document.getElementById(id); }
 
-function showToast(text, type) {
+function showToast(text, type, silent) {
+  if (type === 'warn' && !silent) sfx('warn');   // U03: 실패·경고 메시지마다 경고음
   const el = game.ui.toast;
   el.textContent = text;
   el.className = `toast show ${type || ''}`;
@@ -3887,6 +3905,7 @@ function selectShadow(id) {
   }
   st.selectedShadowId = st.selectedShadowId === id ? null : id;  // 같은 카드 다시 누르면 선택 해제
   if (st.selectedShadowId) {                                     // 카드 선택 시 다른 패널 닫기
+    sfx('select');   // U04
     st.selectedRemnantUid = null;
     st.selectedUnitUid = null;
   }
@@ -3908,7 +3927,7 @@ function onSecondaryClick(evt) {
     const unit = getBasicAt(game.state, p.x, p.y);
     if (unit) {
       const result = recallShadow(game.state, unit);
-      if (result.ok) showToast(`${findShadowData(result.unit.typeId).name} 회수 (에너지 +${result.refund})`, 'ok');
+      if (result.ok) { showToast(`${findShadowData(result.unit.typeId).name} 회수 (에너지 +${result.refund})`, 'ok'); sfx('recall'); }   // A02
       else showToast(reasonText(result, game.state), 'warn');
       return;
     }
@@ -3958,6 +3977,7 @@ function onCanvasClick(evt) {
   // 2순위: 그림자 클릭 → 상세 정보 / 해체 패널
   const unit = getShadowAt(st, p.x, p.y);
   if (unit) {
+    if (st.selectedUnitUid !== unit.uid) sfx('panel');   // U05
     st.selectedUnitUid = unit.uid;
     st.selectedShadowId = null;
     st.selectedRemnantUid = null;
@@ -3966,7 +3986,7 @@ function onCanvasClick(evt) {
   // 3순위: 카드 선택 중이면 배치
   if (st.selectedShadowId) {
     const result = summonShadow(st, st.selectedShadowId, p.x, p.y);
-    if (result.ok) showToast(`${findShadowData(result.unit.typeId).name} 소환`, 'ok');
+    if (result.ok) { showToast(`${findShadowData(result.unit.typeId).name} 소환`, 'ok'); sfx('summon'); }   // A01
     else showToast(reasonText(result, game.state), 'warn');
     return;
   }
@@ -3987,6 +4007,7 @@ function onDismantleConfirm() {
       ? findShadowData(result.unit.typeId).name
       : `${findEnemyData(result.unit.sourceEnemyId).name} 그림자`;
     showToast(`${name} 해체 (에너지 +${result.gained})`, 'ok');
+    sfx('dismantle');   // A03
   } else {
     showToast(reasonText(result, game.state), 'warn');
   }
@@ -3998,6 +4019,7 @@ function onExtract() {
   const result = extractShadow(st, st.selectedRemnantUid);   // 버튼을 누른 순간 조건을 다시 검사
   if (result.ok) {
     showToast(`일어나라! ${findEnemyData(result.unit.sourceEnemyId).name} 그림자 추출`, 'ok');
+    sfx('arise', { track: 'ch' + game.state.chapterId });   // A06: 지금 챕터 곡과 같은 조성
   } else {
     if (result.reason === 'EXTRACT_GONE') st.selectedRemnantUid = null;
     showToast(reasonText(result, game.state), 'warn');   // 에너지 부족 등: 잔영 유지
@@ -4007,16 +4029,31 @@ function onExtract() {
 // 챕터를 처음(웨이브 1)부터 시작. 그 챕터의 이어하기 진행은 지워짐
 function newGame(chapterId = game.state.chapterId) {
   delete game.save.resume[chapterId];
+  const carry = takeCoreCarry(chapterId);
   persistSave();
   setGameState(createInitialState(chapterId, getUnlockedShadowIds(game.save)));
   setStatus(game.state, STATUS.PREPARATION);
   game.lastStatus = game.state.status;
+  if (carry) {   // 앞 챕터를 클리어하고 바로 이 챕터로 넘어옴: 남은 거점 HP + 회복 (최대 HP까지)
+    const st = game.state, heal = GAME_DATA.config.chapterCoreHeal || 0;
+    st.coreHp = Math.min(st.maxCoreHp, Math.round(carry.hp) + heal);
+    showToast(`거점 HP ${Math.round(carry.hp)} + ${heal} 회복 → ${st.coreHp}`, 'ok');
+  }
+}
+
+// 다음 챕터로 이어받을 거점 HP를 꺼냄. 챕터를 시작하면 어느 챕터든 지움 (다른 챕터를 고르거나 이어하기면 적용 안 함)
+function takeCoreCarry(chapterId) {
+  const carry = game.save.carry;
+  game.save.carry = null;
+  return carry && carry.to === chapterId ? carry : null;
 }
 
 // 저장된 진행(마지막으로 클리어한 웨이브 다음)부터 이어서 시작
 function resumeChapter(chapterId) {
   const run = game.save.resume[chapterId];
   if (!run) { newGame(chapterId); return; }
+  game.save.carry = null;   // 이어하기는 저장된 거점 HP 그대로 (회복 없음)
+  persistSave();
   setGameState(restoreRun(run, getUnlockedShadowIds(game.save)));
   showToast(`챕터 ${chapterId} · WAVE ${game.state.wave}부터 이어합니다`, 'ok');
 }
@@ -4118,11 +4155,11 @@ function onResultPrimary() {
 }
 
 function onPause() {
-  if (pauseGame(game.state)) hideToast();
+  if (pauseGame(game.state)) { hideToast(); if (!document.hidden) sfx('pause'); }   // U06 (탭 전환 자동 정지는 소리 없음)
 }
 
 function onResume() {
-  if (resumeGame(game.state)) showToast('전투 재개', 'ok');
+  if (resumeGame(game.state)) { showToast('전투 재개', 'ok'); sfx('resume'); }   // U07
 }
 
 function togglePause() {
@@ -4145,6 +4182,7 @@ function onKeyDown(evt) {
   if (key === 'd') { game.view.showRanges = !game.view.showRanges; return; }
   if (key === 'p') { togglePause(); return; }
   if (key === 'm') { toggleBgm(); return; }
+  if (key === 'n') { toggleSfx(); return; }
   if (key === 'escape') {
     // Esc: 일시정지 중이면 계속하기 → 선택된 것이 있으면 선택 해제 → 전투 중이면 일시정지
     const st = game.state;
@@ -4192,11 +4230,47 @@ function hintText(st) {
 // 규칙 쪽에서 쌓은 알림 처리
 function consumeEvents(st) {
   for (const ev of st.events) {
-    if (ev === 'REMNANT_EXPIRED') showToast(REASON_TEXT.EXTRACT_GONE, 'warn');
-    if (ev === 'UNIT_LOST') showToast(REASON_TEXT.UNIT_LOST, 'warn');
-    if (ev.startsWith('SPAWN_')) game.view.crackFlash[Number(ev.slice(6))] = 1;   // 해당 균열 번쩍
+    if (ev === 'REMNANT_EXPIRED') { showToast(REASON_TEXT.EXTRACT_GONE, 'warn', true); sfx('remnantGone'); }   // A05 (경고음 대신)
+    if (ev === 'UNIT_LOST') showToast(REASON_TEXT.UNIT_LOST, 'warn', true);   // 사망음(A07)이 따로 남
+    if (ev.startsWith('SPAWN_')) { game.view.crackFlash[Number(ev.slice(6))] = 1; sfx('spawn'); }   // 해당 균열 번쩍 + E01
+    playEventSfx(st, ev);
   }
   st.events.length = 0;
+}
+
+/* ---------- 효과음 (bgm.js의 Bgm.sfx). 규칙 코드는 일어난 일만 기록하고, 여기서 소리로 바꿈 ---------- */
+function sfx(name, opts) { if (typeof Bgm !== 'undefined') Bgm.sfx(name, opts); }
+// 그림자 공격 이펙트 → 소리 (S01~S07)
+const SHADOW_ATK_SFX = { slam: 'slam', slash: 'slash', bearclaw: 'bearclaw', orb: 'orb', breath: 'breath', berclaw: 'berclaw' };
+// 적 공격 이펙트 35종 → 공격 유형 소리 (E02~E07). 없는 이펙트(공격 선)는 찌르기로
+const ENEMY_ATK_SFX = {
+  claw: 'eClaw', centclaw: 'eClaw', bite: 'eClaw', hellbite: 'eClaw', antclaw: 'eClaw', iceclaw: 'eClaw',
+  ice: 'eSlash', orcslash: 'eSlash', antslash: 'eSlash', knightslash: 'eSlash', stoneslash: 'eSlash',
+  axeslam: 'eSlam', clubslam: 'eSlam', rockspike: 'eSlam', golemburst: 'eSlam', antblade: 'eSlam',
+  bolt: 'eShotMagic', curse: 'eShotMagic', stonespell: 'eShotMagic', runebolt: 'eShotMagic', spear: 'eShotPhys', acid: 'eShotPhys',
+  blast: 'eBlast', reapwave: 'eBlast', crystalburst: 'eBlast', harpring: 'eBlast', icewave: 'eBlast',
+  queenstab: 'eStab', orcpunch: 'eStab',
+};
+const EXTRACTED_SFX_OPTS = { pitch: 0.89, dark: true };   // 추출 그림자: 한 음 낮고 고역을 깎음
+function playEventSfx(st, ev) {
+  if (ev === 'KILL') sfx('eDie');
+  else if (ev === 'REMNANT') sfx('remnant');
+  else if (ev === 'ENEMY_HIT') sfx('eHit');
+  else if (ev === 'ORB_HIT') sfx('orbHit');
+  else if (ev === 'SHADOW_DIED') sfx('shadowDie');
+  else if (ev === 'CORE_HIT') {
+    sfx('coreHit');
+    // C02: 거점 HP 25% 이하에서 맞으면 웨이브마다 1번 경보 + BGM을 잠깐 낮춤
+    if (st.coreHp > 0 && st.coreHp <= st.maxCoreHp * 0.25 && game.view.coreWarnWave !== st.wave) {
+      game.view.coreWarnWave = st.wave;
+      sfx('coreDanger');
+      if (typeof Bgm !== 'undefined') Bgm.duck(1300);
+    }
+  } else if (ev.startsWith('SHADOW_ATK:')) {
+    const name = SHADOW_ATK_SFX[ev.slice(11)];
+    if (name) sfx(name);
+  } else if (ev.startsWith('ENEMY_ATK:')) sfx(ENEMY_ATK_SFX[ev.slice(10)] || 'eStab');
+  else if (ev.startsWith('EXTRACTED_ATK:')) sfx(ENEMY_ATK_SFX[ev.slice(14)] || 'eStab', EXTRACTED_SFX_OPTS);
 }
 
 // 그림자 상세 정보 + 해체 패널
@@ -4331,7 +4405,7 @@ function syncUI() {
 // 배경 음악: 타이틀·챕터 선택(READY)은 title, 그 밖에는 지금 챕터 곡. 일시정지 중에는 작게 (bgm.js)
 function syncBgm(state) {
   if (typeof Bgm === 'undefined') return;
-  Bgm.update(state.status === STATUS.READY ? 'title' : 'ch' + state.chapterId, state.status === STATUS.PAUSED);
+  Bgm.update(state.status === STATUS.READY ? 'title' : 'ch' + state.chapterId, state.status === STATUS.PAUSED, state.status === STATUS.DEFEAT);
 }
 function toggleBgm() {
   if (typeof Bgm === 'undefined') return;
@@ -4341,6 +4415,16 @@ function toggleBgm() {
   btn.textContent = on ? '♪ BGM 켜짐' : '♪ BGM 꺼짐';
   btn.classList.toggle('off', !on);
   btn.blur();   // 스페이스·엔터가 버튼을 다시 누르지 않게
+}
+
+function toggleSfx() {
+  if (typeof Bgm === 'undefined') return;
+  const on = Bgm.toggleSfx();
+  const btn = $('btn-sfx');
+  if (!btn) return;
+  btn.textContent = on ? '효과음 켜짐' : '효과음 꺼짐';
+  btn.classList.toggle('off', !on);
+  btn.blur();
 }
 
 function frame(now) {
@@ -4414,12 +4498,35 @@ function boot() {
   game.canvas.addEventListener('mouseleave', onMouseLeave);
   $('app').addEventListener('contextmenu', onSecondaryClick);   // 기본 그림자 위: 회수 / 그 밖: 선택 해제
   $('btn-play').addEventListener('click', goToChapters);
+  const sfxBtn = $('btn-sfx');
+  if (sfxBtn) {
+    sfxBtn.addEventListener('click', toggleSfx);
+    if (typeof Bgm !== 'undefined' && !Bgm.isSfxEnabled()) { sfxBtn.textContent = '효과음 꺼짐'; sfxBtn.classList.add('off'); }
+  }
   const bgmBtn = $('btn-bgm');   // 예전 index.html이 캐시돼 버튼이 없어도 게임은 시작되게
   if (bgmBtn) {
     bgmBtn.addEventListener('click', toggleBgm);
     if (typeof Bgm !== 'undefined' && !Bgm.isEnabled()) { bgmBtn.textContent = '♪ BGM 꺼짐'; bgmBtn.classList.add('off'); }
   }
   game.ui.chapterList.addEventListener('click', onChapterListClick);
+  // 전투 화면 버튼 소리 (U01 확인 · U02 뒤로 · U03 주의). 소환·추출·해체 확인·계속하기는 성공할 때 따로 남
+  const BUTTON_SFX = {
+    'btn-start-wave': 'confirm', 'btn-result-primary': 'confirm', 'btn-result-title': 'back',
+    'btn-pause-restart': 'back', 'btn-pause-title': 'back',
+    'btn-extract-cancel': 'back', 'btn-unit-close': 'back', 'btn-dismantle': 'warn', 'btn-dismantle-cancel': 'back',
+  };
+  for (const [id, name] of Object.entries(BUTTON_SFX)) {
+    const b = $(id);
+    if (b) b.addEventListener('click', () => sfx(name), true);
+  }
+  // 타이틀·챕터 선택 버튼 효과음 (시스템 창 전자음): 확인 버튼 '띠링', 처음부터 '띡띡', 그 밖(타이틀로) '띡'
+  for (const id of ['overlay-title', 'overlay-chapters']) {
+    $(id).addEventListener('click', (evt) => {
+      const btn = evt.target.closest('button');
+      if (!btn || btn.disabled || typeof Bgm === 'undefined') return;
+      Bgm.sfx(btn.classList.contains('btn-primary') ? 'confirm' : btn.dataset.action === 'restart' ? 'warn' : 'back');
+    }, true);   // 버튼 목록이 다시 그려지기 전에 (캡처 단계)
+  }
   $('btn-chapters-back').addEventListener('click', goToTitle);
   game.ui.btnStart.addEventListener('click', onStartWave);
   game.ui.btnExtract.addEventListener('click', onExtract);

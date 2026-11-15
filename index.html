@@ -18,8 +18,11 @@
       <div class="hud-item">거점 HP <b id="hud-core"><span id="hud-core-cur">200</span> / <span id="hud-core-max">200</span></b></div>
       <div class="hud-item">군단 <b id="hud-army">0 / 15</b> <small id="hud-army-basic">기본 0/4</small></div>
       <div class="hud-item hud-status" id="hud-status">대기</div>
-      <!-- 배경 음악 켜기/끄기 (M 키). 타이틀·챕터 선택 화면 위에서도 누를 수 있게 창보다 위에 둠 -->
-      <button id="btn-bgm" type="button" class="hud-item hud-bgm" title="배경 음악 켜기/끄기 (M)">♪ BGM 켜짐</button>
+      <!-- 배경 음악(M)·효과음(N) 켜기/끄기: 위아래로 쌓아 HUD 한 줄에 맞춤. 타이틀·챕터 선택 화면 위에서도 누를 수 있게 창보다 위에 둠 -->
+      <div class="hud-sound">
+        <button id="btn-bgm" type="button" class="hud-item hud-bgm" title="배경 음악 켜기/끄기 (M)">♪ BGM 켜짐</button>
+        <button id="btn-sfx" type="button" class="hud-item hud-bgm" title="효과음 켜기/끄기 (N)">효과음 켜짐</button>
+      </div>
     </header>
     <p id="hint"></p>
 
@@ -67,7 +70,7 @@
       <button id="btn-start-wave" type="button" class="btn-primary hidden">WAVE 1 시작</button>
       <button id="btn-pause" type="button" class="btn-secondary btn-pause hidden">일시정지 <span class="kbd">P</span></button>
     </footer>
-    <p class="keys">숫자 키 기본 그림자 선택 · 좌클릭 배치 · 잔영 클릭 → 추출 · 그림자 클릭 → 해체 · 기본 그림자 우클릭 회수(준비 단계) · Esc/우클릭 선택 해제 · P/Esc 일시정지 · D 범위 표시 · M 배경 음악 켜기/끄기</p>
+    <p class="keys">숫자 키 기본 그림자 선택 · 좌클릭 배치 · 잔영 클릭 → 추출 · 그림자 클릭 → 해체 · 기본 그림자 우클릭 회수(준비 단계) · Esc/우클릭 선택 해제 · P/Esc 일시정지 · D 범위 표시 · M 배경 음악 켜기/끄기 · N 효과음 켜기/끄기</p>
 
     <!-- 타이틀 -->
     <div id="overlay-title" class="overlay">
