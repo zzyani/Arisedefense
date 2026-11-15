@@ -1,16 +1,17 @@
 /* ==================================================================
  * 배경 음악 (BGM) — 음악 파일 없이 Web Audio로 실시간 연주하는 자체 작곡 7곡
  *  title : 타이틀·챕터 선택 (D단조 66BPM, 어둡고 신비로운 종소리·합창)
- *  ch1   : 카르테논 신전 (A단조 78BPM, 고대 신전: 합창·하프·플루트·태고)
+ *  ch1   : 카르테논 신전 (A단조 78BPM, 고대 신전: 합창·하프·플루트. 태고는 보스전 버전에만)
  *  ch2   : 설원 숲 (E단조 88BPM, 첼레스타·글로켄·부드러운 현·바람)
  *  ch3   : 오크 주둔지 (C단조 100BPM, 전쟁 북·낮은 금관 반복·뿔나팔)
  *  ch4   : 악마성 (D화성단조 104BPM, 오르간·하프시코드·종·합창)
  *  ch5   : 개미굴 (F#단조 116BPM, 박동하는 저음·벌레 소리·불협 현)
+ *  chN_boss : 보스전 (그 챕터 곡을 1.2배 빠르게 + 북·저음 박동)
  *  ch6   : 카르테논 신전 최종전 (ch1과 같은 화음·선율을 120BPM으로, 금관·현 반복·합창·북을 더해 웅장하게)
  *
  * 사용: Bgm.update(곡 이름, 일시정지 여부)를 매 프레임 호출 → 곡이 바뀌면 1.2초 동안 교차 페이드.
  * 브라우저 정책상 첫 클릭·키 입력 뒤에 소리가 남. M 키·BGM 버튼으로 켜고 끔(이 브라우저에 저장).
- * 효과음: Bgm.sfx(이름) — 효과음 리스트 36종(보스 7종은 보스 구현 때). BGM과 따로 켜고 끔(N 키·효과음 버튼)
+ * 효과음: Bgm.sfx(이름) — 효과음 리스트 43종(보스 7종 포함). BGM과 따로 켜고 끔(N 키·효과음 버튼)
  * 나중에 실제 음악 파일로 바꾸려면 TRACKS 대신 <audio>를 재생하도록 play()만 바꾸면 됨.
  * ================================================================== */
 const Bgm = (() => {
@@ -178,19 +179,12 @@ const Bgm = (() => {
     dismantle: { p: 0, f(t) { nz(t, 0.4, 0.25, { f0: 1500, f1: 500, q: 0.7, rev: 0.3 }); blip(t + 0.12, 1975, 1975, 0.05, 0.08); blip(t + 0.18, 2637, 2637, 0.09, 0.08); } },   // A03
     remnant: { p: 0, f(t) { tone(t, 'sine', 233, 175, 0.3, 0.06, { lp: 900, rev: 0.4 }); fmBell(t, 466, 0.4, 0.02, 1.5, 1.5, 0.4); } },   // A04 (작게)
     remnantGone: { p: 1, f(t) { tone(t, 'sine', 330, 110, 0.45, 0.09, { lp: 800, rev: 0.3 }); } },   // A05
-    arise: { p: 0, f(t, o) {   // A06 "일어나라": 낮은 드론이 0.3초 솟구치다 터지는 화음 + 합창, 강한 잔향
-      const r = midiHz((TRACK_ROOT[o.track] ?? 50) - 12);   // 으뜸음 (낮은 옥타브)
-      const lp = filt('lowpass', 200, 2), g = ctx.createGain();
-      lp.frequency.setValueAtTime(200, t); lp.frequency.exponentialRampToValueAtTime(3200, t + 0.3);
-      g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.12, t + 0.3); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.55);
-      lp.connect(g); sfxDest(g, 0.4);
-      for (const f of [r, r * 1.5]) { const os = ctx.createOscillator(); os.type = 'sawtooth'; os.frequency.setValueAtTime(f, t); os.frequency.exponentialRampToValueAtTime(f * 2, t + 0.3); os.connect(lp); os.start(t); os.stop(t + 0.6); }
-      nz(t, 0.32, 0.06, { type: 'bandpass', f0: 300, f1: 3000, attack: 0.28, q: 0.8 });
-      const b = t + 0.3;   // 터지는 순간
-      padChord(b, [r * 2, r * 2 * 1.189, r * 3, r * 4, r * 4 * 1.189], 1.8, 0.06, { attack: 0.01, lp: 3000, rev: 1 });   // 단조 화음
-      tone(b, 'sine', 110, 38, 0.9, 0.3, { rev: 0.6 });
-      nz(b, 0.5, 0.08, { type: 'lowpass', f0: 4000, f1: 300, rev: 0.8 });
-      fmBell(b, r * 8, 1.6, 0.05, 3.5, 1.5, 0.9);
+    arise: { p: 0, f(t, o) {   // A06 "일어나라": 부드럽게 차오르는 숨결(잡음) 위로 지금 챕터 곡 조성의 맑은 종 화음이 번짐. 쿵·톱니파 없이 은은하게
+      const r = midiHz(TRACK_ROOT[o.track] ?? 50);   // 으뜸음
+      nz(t, 0.9, 0.07, { type: 'bandpass', f0: 250, f1: 1400, q: 0.7, attack: 0.45, hold: 0.5, rev: 0.6 });   // 스르륵 차오름
+      tone(t, 'sine', r / 2, r / 2, 1.4, 0.06, { attack: 0.4, rev: 0.5 });                                    // 낮게 받쳐 주는 울림
+      [1, 1.189, 1.498, 2].forEach((m, k) => fmBell(t + 0.35 + k * 0.07, r * 2 * m, 1.6, 0.06, 2, 0.6, 0.8));   // 단조 화음을 아래에서 위로 펼침
+      shimmer(t + 0.6, r * 8, 1.2, 0.02, 0.8);
     } },
     shadowDie: { p: 1, f(t) { nz(t, 0.5, 0.2, { f0: 900, f1: 250, q: 0.6, rev: 0.3 }); tone(t, 'sine', 440, 150, 0.4, 0.06); } },   // A07
     // ---- 그림자 공격 ----
@@ -219,6 +213,24 @@ const Bgm = (() => {
     eDie:    { p: 0, f(t) { nz(t, 0.3, 0.2, { f0: 1500, f1: 320, q: 1.2 }); blip(t + 0.08, 1318, 1760, 0.06, 0.05, 'sine'); } },   // E09 + 에너지 획득음
     // ---- 거점 ----
     coreHit: { p: 0, f(t) { fmBell(t, 2400, 0.18, 0.06, 2.7, 3, 0.2); nz(t, 0.05, 0.05, { type: 'highpass', f0: 4200 }); tone(t, 'sine', 72, 50, 0.32, 0.12); } },   // C01
+    // ---- 보스 (모든 보스 공통) ----
+    bossAppear: { p: 0, f(t) {   // B01: 낮은 북 2타 + 차가운 바람이 밀려옴, 약 2초
+      tone(t, 'sine', 70, 40, 0.7, 0.3, { rev: 0.5 }); nz(t, 0.25, 0.12, { type: 'lowpass', f0: 900, rev: 0.4 });
+      tone(t + 0.45, 'sine', 65, 36, 0.8, 0.32, { rev: 0.5 }); nz(t + 0.45, 0.25, 0.12, { type: 'lowpass', f0: 800, rev: 0.4 });
+      nz(t + 0.2, 1.8, 0.09, { f0: 400, f1: 1500, q: 0.8, attack: 0.9, rev: 0.6 });
+    } },
+    bossAttack: { p: 2, f(t) { nz(t, 0.16, 0.25, { f0: 700, f1: 1800, q: 1.5 }); tone(t, 'sine', 90, 45, 0.25, 0.08); fmBell(t + 0.03, 2800, 0.2, 0.03, 2.7, 3, 0.2); } },   // B02: 무거운 베기 + 얼음 깨지는 고역
+    bossWarn: { p: 0, f(t) {   // B03: 1.5초 동안 음높이가 올라가며 커지는 차지
+      const src = noise(t, t + 1.55), f = filt('bandpass', 300, 3), g = ctx.createGain();
+      f.frequency.setValueAtTime(300, t); f.frequency.exponentialRampToValueAtTime(3200, t + 1.5);
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.55, t + 1.45); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.53);
+      src.connect(f); f.connect(g); sfxDest(g, 0.3);
+      tone(t, 'sawtooth', 110, 440, 1.5, 0.04, { lp: 1200, attack: 1.3 });
+    } },
+    bossSlam: { p: 0, f(t) { tone(t, 'sine', 90, 30, 0.8, 0.4, { rev: 0.5 }); nz(t, 0.6, 0.14, { type: 'lowpass', f0: 2000, f1: 150, rev: 0.6 }); nz(t + 0.03, 0.4, 0.08, { type: 'highpass', f0: 5000, rev: 0.4 }); } },   // B04: 강한 저음 쿵 + 파편
+    bossSummon: { p: 0, f(t) { padChord(t, [196, 294], 0.7, 0.07, { attack: 0.06, lp: 1600, rev: 0.6 }); padChord(t + 0.35, [220, 330], 0.6, 0.06, { attack: 0.05, lp: 1600, rev: 0.6 }); nz(t + 0.2, 0.25, 0.08, { f0: 700, q: 1.5, rev: 0.4 }); } },   // B05: 뿔피리 신호 + 균열
+    bossEnrage: { p: 2, f(t) { tone(t, 'sawtooth', 70, 55, 0.9, 0.08, { lp: 400 }); padChord(t + 0.1, [233, 247, 349], 0.7, 0.05, { attack: 0.02, lp: 2000, rev: 0.5 }); } },   // B06: 으르렁 + 불협화음
+    bossDie: { p: 1, f(t) { nz(t, 1.4, 0.18, { type: 'lowpass', f0: 3000, f1: 120, rev: 0.9 }); tone(t, 'sine', 80, 28, 1.5, 0.3, { rev: 0.8 }); for (let i = 0; i < 5; i++) fmBell(t + 0.1 + i * 0.12, 1800 + i * 300, 0.4, 0.03, 2.7, 3, 0.6); } },   // B07: 무너지는 소리 + 긴 잔향
     coreDanger: { p: 0, f(t) { for (let i = 0; i < 2; i++) { blip(t + i * 0.42, 988, 988, 0.18, 0.14); blip(t + i * 0.42 + 0.2, 740, 740, 0.18, 0.14); } } },   // C02 (높은 음-낮은 음 2회)
   };
   // 확인용: 효과음 하나를 소리 없이 렌더해 AudioBuffer로 돌려줌 (음량 맞추기용)
@@ -475,14 +487,16 @@ const Bgm = (() => {
     },
     ch1: {
       bpm: 78, beats: 4, bars: 8, gain: 1.0,
-      bar(b, P) {
+      bar(b, P, isBoss) {
         const C = TEMPLE_CHORDS[b], R = TEMPLE_ROOTS[b], a = arpTones(C, 12);
         P.choir(0, 4, up(C, 12), 0.6);
         P.bass(0, 3.8, R, 0.5, { type: 'sine', release: 0.6 });
         P.pad(0, 4, [N(R) + 12], 0.35, { bright: 500 });
         ARP8.forEach((k, i) => P.harp(i * 0.5, a[k], i % 4 === 0 ? 0.42 : 0.3));
-        P.taiko(0, 0.75); P.taiko(2.5, 0.4);
-        if (b === 7) { P.taiko(3, 0.5); P.taiko(3.5, 0.6); }
+        if (isBoss) {   // 둥둥 울리는 태고는 보스전 버전에만 (평소 1챕터 곡에서는 뺌)
+          P.taiko(0, 0.75); P.taiko(2.5, 0.4);
+          if (b === 7) { P.taiko(3, 0.5); P.taiko(3.5, 0.6); }
+        }
         if (b === 0) P.bell(0, 'A5', 0.3, { decay: 3 });
         P.melody('lead', 0, TEMPLE_MELODY[b], 0.6);
       },
@@ -577,6 +591,26 @@ const Bgm = (() => {
       },
     },
   };
+
+  // 보스전 곡: 같은 챕터 곡을 1.2배 빠르게 하고 북(큰북 8분·스네어·태고 연타)과 저음 박동을 더함
+  const BOSS_ROOT = { ch1: 'A1', ch2: 'E2', ch3: 'C2', ch4: 'D2', ch5: 'F#1', ch6: 'A1' };
+  for (const k of ['ch1', 'ch2', 'ch3', 'ch4', 'ch5', 'ch6']) {
+    const t = TRACKS[k], root = N(BOSS_ROOT[k]);
+    TRACKS[k + '_boss'] = {
+      bpm: Math.round(t.bpm * 1.2), beats: t.beats, bars: t.bars, gain: (t.gain ?? 1) * 0.75,
+      bar(b, P) {
+        t.bar(b, P, true);   // true: 보스전 버전 (1챕터는 태고를 그대로 둠)
+        for (let i = 0; i < 8; i++) {
+          P.kick(i * 0.5, i % 2 ? 0.45 : 0.75);
+          P.bass(i * 0.5, 0.42, root + (i === 6 ? 3 : i === 7 ? 5 : 0), i % 2 ? 0.35 : 0.5, { type: 'sawtooth', bright: 420 });
+        }
+        P.snare(1, 0.55); P.snare(3, 0.6);
+        for (let i = 0; i < 16; i++) if (i % 2) P.hat(i * 0.25, 0.3);
+        if (b % 2 === 1) for (let i = 0; i < 4; i++) P.taiko(3 + i * 0.25, 0.4 + i * 0.12);
+        if (b % 4 === 0) P.brass(0, 0.9, [root + 24, root + 31], 0.45, { bright: 2400 });
+      },
+    };
+  }
 
   /* ---------- 재생 ---------- */
   function startTrack(name) {

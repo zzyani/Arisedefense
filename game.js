@@ -106,6 +106,7 @@ function createInitialState(chapterId = GAME_DATA.chapters[0].chapterId, availab
     pendingHits: [],          // 늦게 들어가는 피해 (어금니 마력구처럼 날아가 닿을 때): { uid, dmg, at }
     corpses: [],              // 사망 애니메이션 표시 (연출용)
     events: [],               // 규칙 → UI 알림 (예: 선택한 잔영 만료). UI가 매 프레임 비움
+    boss: null,               // 보스전 진행: { phase: 'waiting'|'active'|'dead', timer, uid, done(소환한 구간), skillTimer, warn, recover, enraged }
     spawnIndex: 0,
     spawnTimer: 0,
     nextUid: 1,               // 전장 객체 고유 ID (종류 ID와 별개)
@@ -135,7 +136,8 @@ function setStatus(state, next) {
  * [3] 규칙 함수 (DOM을 사용하지 않음 → 따로 테스트 가능)
  * ================================================================== */
 function findShadowData(id)     { return GAME_DATA.shadows.find((s) => s.id === id) || null; }
-function findEnemyData(id)      { return GAME_DATA.enemies.find((e) => e.id === id) || null; }
+function findEnemyData(id)      { return GAME_DATA.enemies.find((e) => e.id === id) || (GAME_DATA.bosses || []).find((b) => b.id === id) || null; }   // 보스도 적처럼 찾음
+function findBossData(chapterId) { return (GAME_DATA.bosses || []).find((b) => b.chapterId === chapterId) || null; }
 function findExtractionData(id) { return GAME_DATA.extraction.units.find((u) => u.sourceEnemyId === id) || null; }
 /* ---------- 카드 해금 ---------- */
 // 처음부터 쓰는 카드 (unlockAfterChapter 없음)
@@ -819,6 +821,7 @@ function updateGame(state, dt) {
   state.elapsed += dt;
 
   updateSpawning(state, dt);              // 1. 적 생성
+  updateBoss(state, dt);                  //    보스: 등장 · HP 구간 소환 · 예고 광역 공격
   updateRemnants(state, dt);              // 2. 잔영 시간 갱신
   updateEnemyMovement(state, dt);         // 3. 적 이동 / 거점 도달 (도달하면 멈춰서 거점 공격)
   updateExtractedAI(state, dt);           // 4. 추출 그림자 탐색 / 추격 / 복귀
@@ -836,8 +839,14 @@ function updateGame(state, dt) {
     state.stats.kills += 1;
     state.events.push('KILL');   // 효과음용
     state.stats.waveKills += 1;
-    addEnergy(state, GAME_DATA.config.killReward);
-    if (Math.random() < GAME_DATA.extraction.remnantChance) createRemnant(state, enemy);
+    if (enemy.isBoss) {                   //    보스: 에너지만 많이, 잔영 없음(추출 불가)
+      addEnergy(state, findEnemyData(enemy.typeId).reward || 0);
+      if (state.boss) { state.boss.phase = 'dead'; state.boss.warn = state.boss.recover = 0; }
+      state.events.push('BOSS_KILL');
+    } else {
+      addEnergy(state, GAME_DATA.config.killReward);
+      if (Math.random() < GAME_DATA.extraction.remnantChance) createRemnant(state, enemy);
+    }
     addCorpse(state, enemy);
   }
   cleanupDead(state);                     // 8. 사망 객체 일괄 제거
@@ -872,6 +881,7 @@ function updateEnemyMovement(state, dt) {
   const core = GAME_DATA.field.core;
   for (const e of state.enemies) {
     if (!e.alive) continue;
+    if (e.casting) { e.moving = false; continue; }   // 보스 광역 공격 예고·후딜레이: 제자리
     // 사거리 안에 그림자가 있거나 거점에 붙었으면 멈춤 (원거리형은 쏘면서 거점 둘레까지 계속 이동)
     e.moving = !e.atCore && (e.moveWhileAttacking || !findEnemyTarget(state, e));
     if (!e.moving) continue;
@@ -1093,10 +1103,84 @@ function processShadowAttacks(state) {
   return killed;
 }
 
+/* ---------- 보스 ---------- */
+// 챕터 마지막 웨이브에 보스가 있으면 보스 웨이브
+function isBossWave(state) { return state.wave === getWaveCount(state) && !!findBossData(state.chapterId); }
+
+function createBoss(state, d) {
+  const e = createEnemy(state, d.id, 0);   // 북쪽 출현 지점 (출현 연출도 같음)
+  e.isBoss = true;
+  e.casting = false;   // 광역 공격 예고·후딜레이 중이면 true (이동·기본 공격 정지)
+  return e;
+}
+
+function updateBoss(state, dt) {
+  if (!isBossWave(state)) return;
+  const d = findBossData(state.chapterId), wave = getWaveData(state, state.wave);
+  let B = state.boss;
+  // 1. 일반 적을 모두 처치하면 bossDelay초 뒤 등장
+  if (!B) {
+    if (state.spawnIndex < wave.enemies.length || state.enemies.length > 0) return;
+    B = state.boss = { phase: 'waiting', timer: GAME_DATA.bossDelay ?? 2, uid: null, done: [], skillTimer: 0, warn: 0, recover: 0, enraged: false };
+  }
+  if (B.phase === 'waiting') {
+    B.timer -= dt;
+    if (B.timer > 0) return;
+    const e = createBoss(state, d);
+    state.enemies.push(e);
+    B.phase = 'active'; B.uid = e.uid; B.skillTimer = d.slam.first;
+    state.events.push('SPAWN_0', 'BOSS_APPEAR');
+    return;
+  }
+  if (B.phase !== 'active') return;
+  const e = state.enemies.find((x) => x.uid === B.uid);
+  if (!e || !e.alive) return;
+  // 2. HP 구간 소환 (구간마다 한 번, 보스 주변)
+  d.summons.forEach((sm, i) => {
+    if (B.done.includes(i) || e.hp > e.maxHp * sm.at) return;
+    B.done.push(i);
+    sm.enemies.forEach((id, k) => {
+      const m = createEnemy(state, id, 0);
+      const ang = Math.PI * (0.25 + 0.5 * k / Math.max(1, sm.enemies.length - 1)) + (i % 2 ? Math.PI : 0);   // 보스 앞뒤로 부채꼴
+      m.x = Math.max(20, Math.min(GAME_DATA.field.width - 20, e.x + Math.cos(ang) * 40));
+      m.y = Math.max(e.y, Math.min(GAME_DATA.field.height - 20, e.y + Math.sin(ang) * 30 + 10));
+      m.spawn = null;   // 출현 연출(북쪽 벽 가림) 없이 바로 보임
+      state.enemies.push(m);
+    });
+    state.events.push('BOSS_SUMMON');
+  });
+  if (!B.enraged && e.hp <= e.maxHp * d.slam.enrageAt) { B.enraged = true; state.events.push('BOSS_ENRAGE'); }
+  // 3. 예고 광역 공격: 예고(정지) → 발동(반경 안 그림자 전부 피해) → 후딜레이 → 재사용 대기
+  const S = d.slam;
+  if (B.warn > 0) {
+    B.warn -= dt;
+    if (B.warn <= 0) {
+      B.warn = 0;
+      for (const s of getAllShadows(state)) {
+        if (!s.alive || dist(s.x, s.y, e.x, e.y) > S.radius) continue;
+        const died = applyDamage(s, calcDamage(S.damage));
+        s.hitAt = state.elapsed;
+        if (died) { addCorpse(state, s); state.events.push('SHADOW_DIED'); }
+      }
+      const fx = addEffect(state, e.x, e.y, e.x, e.y, 'enemy', 'bossSlam');
+      fx.radius = S.radius; fx.color = d.color;
+      B.recover = S.recover;
+      B.skillTimer = B.enraged ? S.enragedCooldown : S.cooldown;   // 재사용은 발동 순간부터
+      state.events.push('BOSS_SLAM');
+    }
+  } else if (B.recover > 0) {
+    B.recover -= dt;
+  } else {
+    B.skillTimer -= dt;
+    if (B.skillTimer <= 0) { B.warn = S.warn; B.warnTotal = S.warn; state.events.push('BOSS_WARN'); }
+  }
+  e.casting = B.warn > 0 || B.recover > 0;
+}
+
 function processEnemyAttacks(state) {
   const core = GAME_DATA.field.core;
   for (const e of state.enemies) {
-    if (!e.alive || e.cooldown > 0) continue;
+    if (!e.alive || e.cooldown > 0 || e.casting) continue;   // 보스 광역 공격 중에는 기본 공격 안 함
     const target = findEnemyTarget(state, e);   // 매번 다시 찾음 → 이미 죽은 그림자 공격 방지
     if (!target) {
       // 거점에 붙은 적: 사거리에 그림자가 없으면 공격 간격마다 공격력만큼 거점 피해 (처치될 때까지 반복)
@@ -1110,7 +1194,7 @@ function processEnemyAttacks(state) {
       const d = dist(e.x, e.y, core.x, core.y) || 1;
       const hx = core.x + (e.x - core.x) / d * core.radius * 0.7, hy = core.y + (e.y - core.y) / d * core.radius * 0.7;
       const cfx = addEffect(state, e.x, e.y, hx, hy, 'enemy', enemyFxStyle(e.typeId, state.chapterId));
-      state.events.push(`ENEMY_ATK:${cfx.style || ''}`, 'CORE_HIT');   // 효과음용: 거점 피격
+      state.events.push(e.isBoss ? 'BOSS_ATK' : `ENEMY_ATK:${cfx.style || ''}`, 'CORE_HIT');   // 효과음용: 거점 피격
       cfx.facing = e.facing;
       cfx.radius = e.attackRange;
       e.cooldown = e.attackInterval;
@@ -1127,7 +1211,7 @@ function processEnemyAttacks(state) {
     faceToward(e, target.x);
     e.attackAt = state.elapsed;   // 공격 애니메이션용
     const fx = addEffect(state, e.x, e.y, target.x, target.y, 'enemy', enemyFxStyle(e.typeId, state.chapterId));
-    state.events.push(`ENEMY_ATK:${fx.style || ''}`);   // 효과음용
+    state.events.push(e.isBoss ? 'BOSS_ATK' : `ENEMY_ATK:${fx.style || ''}`);   // 효과음용
     fx.facing = e.facing;
     fx.radius = e.attackRange;
     e.cooldown = e.attackInterval;
@@ -1174,6 +1258,7 @@ function checkWaveComplete(state) {
   const wave = getWaveData(state, state.wave);
   if (!wave) return;
   if (state.spawnIndex < wave.enemies.length || state.enemies.length > 0) return;
+  if (isBossWave(state) && !(state.boss && state.boss.phase === 'dead')) return;   // 보스가 아직 안 나왔거나 살아 있음
   const isLast = state.wave >= getWaveCount(state);   // 챕터 마지막 웨이브 → 챕터 클리어
   // 웨이브가 끝나면 추출하지 않은 잔영은 모두 사라짐 → 준비 단계에는 잔영이 남지 않음
   state.remnants = [];
@@ -1186,7 +1271,7 @@ function checkWaveComplete(state) {
 
 // 공격 연출 (게임 규칙에 영향 없음). style: 없으면 공격 선, 'claw'면 할퀴기 자국
 const LINE_FX_TIME = 0.12;
-const ATTACK_FX_TIME = { claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36, bolt: 0.28, blast: 0.4, breath: 0.55, orb: 0.56, berclaw: 0.28, centclaw: 0.4, iceclaw: 0.42, icewave: 0.4, orcslash: 0.4, spear: 0.42, orcpunch: 0.46, axeslam: 0.42, rockspike: 0.44, hellbite: 0.42, clubslam: 0.44, curse: 0.6, reapwave: 0.5, antslash: 0.36, antclaw: 0.36, antblade: 0.44, acid: 0.42, queenstab: 0.34, crystalburst: 0.56, knightslash: 0.4, golemburst: 0.5, stonespell: 0.62, runebolt: 0.6, harpring: 0.62, stoneslash: 0.34 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
+const ATTACK_FX_TIME = { bossSlam: 0.5, claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36, bolt: 0.28, blast: 0.4, breath: 0.55, orb: 0.56, berclaw: 0.28, centclaw: 0.4, iceclaw: 0.42, icewave: 0.4, orcslash: 0.4, spear: 0.42, orcpunch: 0.46, axeslam: 0.42, rockspike: 0.44, hellbite: 0.42, clubslam: 0.44, curse: 0.6, reapwave: 0.5, antslash: 0.36, antclaw: 0.36, antblade: 0.44, acid: 0.42, queenstab: 0.34, crystalburst: 0.56, knightslash: 0.4, golemburst: 0.5, stonespell: 0.62, runebolt: 0.6, harpring: 0.62, stoneslash: 0.34 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
 const ORB_IMPACT_TIME = 0.18;   // 마력구가 닿은 뒤 터지며 흩어지는 시간(초)
 function addEffect(state, x1, y1, x2, y2, kind, style) {
   const ttl = ATTACK_FX_TIME[style] || LINE_FX_TIME;
@@ -1249,6 +1334,20 @@ function validateGameData(data) {
     }
     if (e.targetType !== undefined && !['single', 'all_in_range'].includes(e.targetType)) errors.push(`enemies ${e.id}: targetType은 single 또는 all_in_range 입니다.`);
     if (e.coreStandoff !== undefined && !(typeof e.coreStandoff === 'number' && e.coreStandoff >= 0)) errors.push(`enemies ${e.id}: coreStandoff는 0 이상 숫자여야 합니다.`);
+  }
+  for (const b of data.bosses || []) {   // 보스: 기본 수치 + 소환 구간 + 광역 공격
+    if (!(data.chapters || []).some((ch) => ch.chapterId === b.chapterId)) errors.push(`bosses ${b.id}: chapterId ${b.chapterId} 챕터가 없습니다.`);
+    for (const k of ['maxHp', 'attack', 'moveSpeed', 'attackInterval', 'attackRange', 'radius']) {
+      if (!isPos(b[k])) errors.push(`bosses ${b.id}: ${k} 값이 올바르지 않습니다 (${b[k]}).`);
+    }
+    for (const sm of b.summons || []) {
+      if (!(sm.at > 0 && sm.at < 1)) errors.push(`bosses ${b.id}: summons의 at은 0~1 사이여야 합니다.`);
+      for (const id of sm.enemies || []) if (!data.enemies.some((e) => e.id === id)) errors.push(`bosses ${b.id}: 없는 적 ID ${id}`);
+    }
+    const S = b.slam || {};
+    for (const k of ['first', 'warn', 'radius', 'damage', 'cooldown', 'enragedCooldown']) {
+      if (!isPos(S[k])) errors.push(`bosses ${b.id}: slam.${k} 값이 올바르지 않습니다 (${S[k]}).`);
+    }
   }
 
   const ex = data.extraction;
@@ -2059,6 +2158,9 @@ function drawSpriteFrame(ctx, cfg, tinted, animName, frame, x, y, facing, alpha,
   if (tinted || cfg.glow) {   // 그림자 유닛: 보랏빛 윤곽 빛
     ctx.shadowColor = COLORS.extractedLine;
     ctx.shadowBlur = 8;
+  } else if (cfg.bossGlow) {  // 보스: 보스 색 기운
+    ctx.shadowColor = cfg.bossGlow;
+    ctx.shadowBlur = 10;
   }
   ctx.translate(px + sx, py);
   ctx.scale(facing * s, s);
@@ -2075,6 +2177,53 @@ function drawSpriteFrame(ctx, cfg, tinted, animName, frame, x, y, facing, alpha,
   ctx.restore();
 }
 
+function hexRgb(hex) { const n = parseInt(hex.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+
+// 보스 광역 공격 예고: 바닥에 반경 원 + 가운데서 차오르는 채움 (다 차면 발동). 끝에 가까울수록 빨리 깜빡임
+function drawBossWarning(ctx, state) {
+  const B = state.boss;
+  if (!B || !(B.warn > 0)) return;
+  const e = state.enemies.find((x) => x.uid === B.uid);
+  if (!e) return;
+  const d = findEnemyData(e.typeId), S = d.slam, c = hexRgb(d.color);
+  const p = 1 - B.warn / (B.warnTotal || S.warn);   // 0 → 1
+  const cy = e.y + 8, R = S.radius;
+  const blink = 0.55 + 0.45 * Math.abs(Math.sin(state.elapsed * (6 + 14 * p)));
+  ctx.save();
+  ctx.fillStyle = rgba(c, 0.10 + 0.08 * blink);
+  ctx.beginPath(); ctx.ellipse(e.x, cy, R, R * 0.55, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = rgba(c, 0.28);
+  ctx.beginPath(); ctx.ellipse(e.x, cy, R * p, R * 0.55 * p, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = rgba(c, 0.6 + 0.4 * blink); ctx.lineWidth = 2;
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath(); ctx.ellipse(e.x, cy, R, R * 0.55, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+}
+
+// 보스 HP 바: 전장 위 가운데. 보스 이름 + 긴 바 + 소환 구간(70%·40%) 눈금. 보스가 살아 있을 때만
+function drawBossBar(ctx, state) {
+  const B = state.boss;
+  if (!B || B.phase !== 'active') return;
+  const e = state.enemies.find((x) => x.uid === B.uid);
+  if (!e || !e.alive) return;
+  const d = findEnemyData(e.typeId), c = hexRgb(d.color);
+  const W = 360, H = 9, x = (GAME_DATA.field.width - W) / 2, y = 30;
+  ctx.save();
+  ctx.fillStyle = 'rgba(5, 10, 20, 0.85)';
+  ctx.fillRect(x - 3, y - 3, W + 6, H + 6);
+  ctx.strokeStyle = rgba(c, 0.9); ctx.lineWidth = 1;
+  ctx.strokeRect(x - 3.5, y - 3.5, W + 7, H + 7);
+  const r = Math.max(0, e.hp / e.maxHp);
+  ctx.fillStyle = B.enraged ? '#ff4a5a' : rgba(c, 1);
+  ctx.shadowColor = rgba(c, 0.8); ctx.shadowBlur = 6;
+  ctx.fillRect(x, y, Math.round(W * r), H);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(255,255,255,0.75)';   // 소환 구간 눈금
+  for (const sm of d.summons) ctx.fillRect(Math.round(x + W * sm.at), y - 2, 1, H + 4);
+  ctx.restore();
+  drawLabel(ctx, `${d.name}${B.enraged ? ' · 분노' : ''}`, GAME_DATA.field.width / 2, y - 10, COLORS.text, '13px Galmuri11, sans-serif');
+}
+
 // 원본 시트를 보랏빛 그림자로 물들인 사본 (픽셀을 읽지 않으므로 파일로 열어도 동작)
 function buildTintedSheet(img, color = EXTRACTED_TINT) {
   const c = document.createElement('canvas');
@@ -2088,11 +2237,26 @@ function buildTintedSheet(img, color = EXTRACTED_TINT) {
   return c;
 }
 
+// 보스 임시 그림 (에셋을 받으면 교체): 그 챕터 중장갑형 그림을 1.5배로 그리고 보스 색을 덮음 + 보스 기운(윤곽 빛)
+//  1.5배는 고해상도 화면(2배)에서 도트 1칸 = 화면 3픽셀이라 고르게 보임
+const BOSS_LOOK = {
+  BOSS_1: { base: 'EN_003',     tint: 'rgba(40, 150, 80, 0.32)',   glow: 'rgba(80, 255, 140, 0.75)' },   // 카사카: 독빛 초록
+  BOSS_2: { base: 'EN_003@ch2', tint: 'rgba(60, 170, 255, 0.30)',  glow: 'rgba(140, 220, 255, 0.8)' },   // 바루카: 얼음빛
+  BOSS_3: { base: 'EN_003@ch3', tint: 'rgba(120, 160, 30, 0.30)',  glow: 'rgba(200, 255, 90, 0.7)' },    // 카르갈간: 주술 초록
+  BOSS_4: { base: 'EN_003@ch4', tint: 'rgba(200, 20, 20, 0.30)',   glow: 'rgba(255, 70, 50, 0.8)' },     // 바란: 핏빛
+  BOSS_5: { base: 'EN_003@ch5', tint: 'rgba(120, 10, 30, 0.40)',   glow: 'rgba(255, 50, 90, 0.75)' },    // 개미왕: 검붉은빛
+  BOSS_6: { base: 'EN_003@ch6', tint: 'rgba(230, 180, 60, 0.32)',  glow: 'rgba(255, 210, 100, 0.8)' },   // 신상: 금빛
+};
+for (const [id, look] of Object.entries(BOSS_LOOK)) {
+  const base = SPRITES[look.base];
+  if (base) SPRITES[id] = { ...base, scale: 1.5, bossTint: look.tint, bossGlow: look.glow };
+}
+
 function loadSprites() {
   for (const [id, cfg] of Object.entries(SPRITES)) {
     const img = new Image();
     img.onload = () => {
-      cfg.img = img;
+      cfg.img = cfg.bossTint ? buildTintedSheet(img, cfg.bossTint) : img;   // 보스: 보스 색을 덮은 사본
       cfg.tinted = buildTintedSheet(img);
       cfg.flash = buildTintedSheet(img, '#ffffff');   // 피격 번쩍임용 흰 실루엣
     };
@@ -3066,6 +3230,21 @@ const PROC_FX_COLORS = {
   blast: { enemy: [255, 90, 60],   shadow: [110, 215, 255], extracted: [190, 150, 255] },
 };
 const PROC_FX = {
+  // 보스 광역 공격 발동: 반경까지 빠르게 퍼지는 충격파 + 바닥 섬광 (보스 색)
+  bossSlam(ctx, fx) {
+    const p = Math.min(1, (fx.life - fx.ttl) / fx.life);
+    const c = hexRgb(fx.color || '#ff5a3c');
+    const R = fx.radius * (0.25 + 0.75 * Math.sqrt(p));
+    ctx.save();
+    ctx.fillStyle = rgba(c, 0.35 * (1 - p));
+    ctx.beginPath(); ctx.ellipse(fx.x1, fx.y1 + 8, R, R * 0.55, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = rgba(c, 1 - p); ctx.lineWidth = 4 * (1 - p) + 1;
+    ctx.shadowColor = rgba(c, 0.9); ctx.shadowBlur = 12;
+    ctx.beginPath(); ctx.ellipse(fx.x1, fx.y1 + 8, R, R * 0.55, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = `rgba(255,255,255,${0.8 * (1 - p)})`; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.ellipse(fx.x1, fx.y1 + 8, R * 0.8, R * 0.44, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  },
   // 탄환: 쏜 쪽에서 맞은 쪽으로 날아가며 꼬리를 남기고, 끝에서 작게 터짐
   bolt(ctx, fx) {
     const c = PROC_FX_COLORS.bolt[fx.kind] || PROC_FX_COLORS.bolt.enemy;
@@ -3339,6 +3518,19 @@ function drawCoreSprite(ctx, core, state, C) {
 }
 const CORE_HP_LOW = 50;   // 거점 HP가 이 값 이하면 숫자를 붉게
 
+// 거점 위험 테두리: 숫자가 붉어지는 기준과 같게 켬 (타이틀·챕터 선택 화면에서는 끔). HP가 적을수록 진하고 빠르게
+function syncLowHpVignette(st) {
+  const el = game.ui.lowHpVignette;
+  if (!el) return;
+  const on = st.status !== STATUS.READY && st.coreHp > 0 && st.coreHp <= CORE_HP_LOW;
+  el.classList.toggle('on', on);
+  el.classList.toggle('paused', st.status === STATUS.PAUSED);
+  if (on) {
+    const low = (1 - st.coreHp / CORE_HP_LOW).toFixed(2);   // 0(=50) ~ 1(=0에 가까움)
+    if (el.style.getPropertyValue('--low') !== low) el.style.setProperty('--low', low);
+  }
+}
+
 function loadFxSheets() {
   for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, SLAM_FX, BITE_FX, BERCLAW_FX, CENTCLAW_FX, ICECLAW_FX, ICEWAVE_FX, ORCSLASH_FX, SPEAR_FX, ORCPUNCH_FX, AXESLAM_FX, ROCKSPIKE_FX, HELLBITE_FX, CLUBSLAM_FX, CURSE_FX, REAPWAVE_FX, ANTSLASH_FX, ANTCLAW_FX, ANTBLADE_FX, ACID_FX, QUEENSTAB_FX, CRYSTALBURST_FX, KNIGHTSLASH_FX, GOLEMBURST_FX, STONESPELL_FX, RUNEBOLT_FX, HARPRING_FX, STONESLASH_FX, BREATH_FX, ORB_FX, REMNANT_FX, DEMON_WINDOWS, ANT_GLOW, ...Object.values(CORE_SPRITES)]) {
     const img = new Image();
@@ -3580,6 +3772,8 @@ function render(ctx, state, view) {
     ctx.lineWidth = 1;
   }
 
+  drawBossWarning(ctx, state);   // 보스 광역 공격 예고 원 (바닥)
+
   // 기본 그림자
   for (const u of state.basicUnits) {
     const d = findShadowData(u.typeId);
@@ -3692,7 +3886,7 @@ function render(ctx, state, view) {
       withClip(ctx, clipTop, () => {
         drawGroundShadow(ctx, cfg, pick.anim, pick.frame, e.x, e.y, 1, 1, GROUND_SHADOW);
         drawSpriteFrame(ctx, cfg, false, pick.anim, pick.frame, e.x, e.y, e.facing || 1, 1, 1, pick.bob, hitFx(e.hitAt, state.elapsed));
-        drawHpBar(ctx, e.x, spriteTopY(cfg, e.y, 1) - 6, 30, e.hp / e.maxHp, COLORS.hpEnemy);
+        drawHpBar(ctx, e.x, spriteTopY(cfg, e.y, 1) - 6, e.isBoss ? 48 : 30, e.hp / e.maxHp, COLORS.hpEnemy);
       });
       continue;
     }
@@ -3745,6 +3939,8 @@ function render(ctx, state, view) {
 
   // 설원 숲: 휘날리는 눈 (유닛 위, 배치 미리보기 아래)
   if (theme.snow) drawSnowfall(ctx, view.time);
+
+  drawBossBar(ctx, state);   // 보스 이름 + HP 바 (전장 위 가운데)
 
   // 배치 미리보기 (카드 선택 중 마우스 위치)
   if (placing && view.mouse && view.hoverRemnantUid === null) {
@@ -4252,8 +4448,18 @@ const ENEMY_ATK_SFX = {
   queenstab: 'eStab', orcpunch: 'eStab',
 };
 const EXTRACTED_SFX_OPTS = { pitch: 0.89, dark: true };   // 추출 그림자: 한 음 낮고 고역을 깎음
+// 이름 뒤 조사 '이'/'가' (받침 있으면 '이')
+function josaIGa(word) { const c = word.charCodeAt(word.length - 1) - 0xac00; return c >= 0 && c < 11172 && c % 28 ? '이' : '가'; }
 function playEventSfx(st, ev) {
-  if (ev === 'KILL') sfx('eDie');
+  const bossName = () => (findBossData(st.chapterId) || {}).name || '보스';
+  if (ev === 'BOSS_APPEAR') { sfx('bossAppear'); showToast(`보스 ${bossName()} 등장!`, 'warn', true); }
+  else if (ev === 'BOSS_SUMMON') { sfx('bossSummon'); showToast(`${bossName()}${josaIGa(bossName())} 부하를 불러들였다!`, 'warn', true); }
+  else if (ev === 'BOSS_ENRAGE') sfx('bossEnrage');
+  else if (ev === 'BOSS_WARN') sfx('bossWarn');
+  else if (ev === 'BOSS_SLAM') sfx('bossSlam');
+  else if (ev === 'BOSS_ATK') sfx('bossAttack');
+  else if (ev === 'BOSS_KILL') { sfx('bossDie'); showToast(`${bossName()} 처치! (에너지 +${(findBossData(st.chapterId) || {}).reward || 0})`, 'ok'); }
+  else if (ev === 'KILL') sfx('eDie');
   else if (ev === 'REMNANT') sfx('remnant');
   else if (ev === 'ENEMY_HIT') sfx('eHit');
   else if (ev === 'ORB_HIT') sfx('orbHit');
@@ -4336,6 +4542,7 @@ function syncUI() {
   setText(ui.status, STATUS_TEXT[st.status]);
   setText(ui.hint, hintText(st));
   ui.coreCur.classList.toggle('danger', st.coreHp <= CORE_HP_LOW);   // 거점 위 숫자와 같은 기준
+  syncLowHpVignette(st);
 
   const basicFull = countBasic(st) >= st.maxBasic || countArmy(st) >= C.maxArmy;
   for (const btn of ui.cards.children) {
@@ -4405,7 +4612,8 @@ function syncUI() {
 // 배경 음악: 타이틀·챕터 선택(READY)은 title, 그 밖에는 지금 챕터 곡. 일시정지 중에는 작게 (bgm.js)
 function syncBgm(state) {
   if (typeof Bgm === 'undefined') return;
-  Bgm.update(state.status === STATUS.READY ? 'title' : 'ch' + state.chapterId, state.status === STATUS.PAUSED, state.status === STATUS.DEFEAT);
+  const bossOn = state.boss && state.boss.phase === 'active';   // 보스가 살아 있으면 그 챕터 곡의 보스전 버전
+  Bgm.update(state.status === STATUS.READY ? 'title' : 'ch' + state.chapterId + (bossOn ? '_boss' : ''), state.status === STATUS.PAUSED, state.status === STATUS.DEFEAT);
 }
 function toggleBgm() {
   if (typeof Bgm === 'undefined') return;
@@ -4480,6 +4688,7 @@ function boot() {
     overlayTitle: $('overlay-title'), overlayResult: $('overlay-result'),
     resultTitle: $('result-title'), resultDesc: $('result-desc'), resultExtra: $('result-extra'),
     btnResultPrimary: $('btn-result-primary'), btnResultTitle: $('btn-result-title'),
+    lowHpVignette: $('low-hp-vignette'),
     overlayChapters: $('overlay-chapters'), chapterList: $('chapter-list'),
     btnPause: $('btn-pause'), overlayPause: $('overlay-pause'), pauseStats: $('pause-stats'),
   };

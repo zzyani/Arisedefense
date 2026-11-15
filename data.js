@@ -87,6 +87,34 @@ const GAME_DATA = {
     { id: 'EN_006', name: '스피드형', maxHp: 55,  attack: 8,  moveSpeed: 100, attackInterval: 0.8, attackRange: 40, radius: 11, color: '#7fdc5a' },   // 챕터 5부터
   ],
 
+  // 보스: 챕터 마지막 웨이브(5웨이브)의 일반 적을 모두 처치하면 bossDelay초 뒤 북쪽에서 등장.
+  //  이동·공격·거점 공격은 일반 적과 같고, 아래 두 패턴이 더해짐 (모든 보스 공통 틀, 수치만 보스마다 다름)
+  //  summons: HP가 at(비율) 이하가 되면 보스 주변에 부하를 한 번 불러냄 (부하는 일반 적과 같은 보상·잔영)
+  //  slam: 예고 광역 공격. first초 뒤 첫 발동, warn초 동안 바닥에 원을 예고(그동안 보스 정지) → 반경 radius 안의 모든 그림자에게 damage(피할 수 없음)
+  //        → recover초 쉼. 재사용은 발동 순간부터 cooldown초, HP가 enrageAt 이하면 enragedCooldown초 (분노)
+  //  처치 보상: 에너지 reward, 잔영 없음(추출 불가). 그림은 지금은 그 챕터 중장갑형 그림을 1.5배·색을 바꿔 임시로 씀 (game.js BOSS_LOOK)
+  bossDelay: 2,
+  bosses: [
+    { id: 'BOSS_1', chapterId: 1, name: '카사카',   maxHp: 2600,  attack: 13, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#3fae6a', reward: 50,
+      summons: [{ at: 0.7, enemies: ['EN_001', 'EN_001', 'EN_002'] }, { at: 0.4, enemies: ['EN_001', 'EN_001', 'EN_003'] }],
+      slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 22, cooldown: 10, enragedCooldown: 7, enrageAt: 0.4 } },
+    { id: 'BOSS_2', chapterId: 2, name: '바루카',   maxHp: 3400,  attack: 15, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#8fd8ff', reward: 50,
+      summons: [{ at: 0.7, enemies: ['EN_001', 'EN_001', 'EN_002'] }, { at: 0.4, enemies: ['EN_001', 'EN_001', 'EN_003'] }],
+      slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 25, cooldown: 10, enragedCooldown: 7, enrageAt: 0.4 } },
+    { id: 'BOSS_3', chapterId: 3, name: '카르갈간', maxHp: 4400,  attack: 17, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#7fae3a', reward: 50,
+      summons: [{ at: 0.7, enemies: ['EN_001', 'EN_001', 'EN_002'] }, { at: 0.4, enemies: ['EN_001', 'EN_004', 'EN_003'] }],
+      slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 28, cooldown: 10, enragedCooldown: 7, enrageAt: 0.4 } },
+    { id: 'BOSS_4', chapterId: 4, name: '바란',     maxHp: 5400,  attack: 19, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#ff4a3a', reward: 50,
+      summons: [{ at: 0.7, enemies: ['EN_001', 'EN_002', 'EN_004'] }, { at: 0.4, enemies: ['EN_001', 'EN_005', 'EN_003'] }],
+      slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 32, cooldown: 10, enragedCooldown: 7, enrageAt: 0.4 } },
+    { id: 'BOSS_5', chapterId: 5, name: '개미왕',   maxHp: 6400,  attack: 21, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#c8304a', reward: 50,
+      summons: [{ at: 0.7, enemies: ['EN_001', 'EN_006', 'EN_002'] }, { at: 0.4, enemies: ['EN_006', 'EN_005', 'EN_003'] }],
+      slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 36, cooldown: 10, enragedCooldown: 7, enrageAt: 0.4 } },
+    { id: 'BOSS_6', chapterId: 6, name: '신상',     maxHp: 8000, attack: 24, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#ffd166', reward: 50,
+      summons: [{ at: 0.7, enemies: ['EN_001', 'EN_002', 'EN_006'] }, { at: 0.4, enemies: ['EN_004', 'EN_005', 'EN_003'] }],
+      slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 42, cooldown: 10, enragedCooldown: 7, enrageAt: 0.4 } },
+  ],
+
   // 그림자 추출: 적 사망 위치에 잔영 생성 → 플레이어가 선택·에너지 지불 → 자동 추적형 그림자
   extraction: {
     remnantChance: 1.0,     // 잔영 생성 확률 (1.0 = 100%)

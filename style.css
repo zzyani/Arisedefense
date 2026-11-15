@@ -94,20 +94,16 @@ button { font-family: inherit; }
 
 .hud-item small { font-size: 11px; color: var(--sub); margin-left: 4px; }
 
-/* 배경 음악·효과음 버튼: HUD 맨 오른쪽에 위아래로 쌓음. 타이틀·챕터 선택 창(z-index 10) 위에서도 누를 수 있게 */
+/* 배경 음악·효과음 버튼: HUD 맨 오른쪽에 나란히 (BGM 왼쪽, 효과음 오른쪽).
+   타이틀·챕터 선택·일시정지·결과 창이 떠 있으면 창 아래에 가려져 누를 수 없음 (M·N 키는 언제나 동작) */
 .hud-sound {
-  position: relative;
-  z-index: 11;
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
 .hud-bgm {
-  flex: 1;
-  padding: 1px 9px;
+  padding: 7px 8px;
   font-size: 11px;
-  line-height: 1.2;
-  text-align: left;
+  white-space: nowrap;
   font-family: inherit;
   cursor: pointer;
   color: var(--accent-2);
@@ -131,6 +127,34 @@ button { font-family: inherit; }
 
 /* ---------- 전장 ---------- */
 #field-wrap { position: relative; }
+
+/* 거점 위험 테두리: 거점 HP 숫자가 붉어지면(50 이하) 전장 가장자리가 심장 박동처럼 붉게 일렁임.
+   --low(0~1)가 클수록(HP가 적을수록) 진하고 빠르게. 일시정지 중에는 멈춤 */
+.low-hp-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;   /* 쌓임 순서는 문서 순서: 전장 위, 추출·해체 패널과 메시지 아래 */
+  opacity: 0;
+  transition: opacity 0.4s;
+  --low: 0;
+  background: radial-gradient(ellipse at center, transparent 52%, rgba(255, 30, 50, calc(0.28 + 0.3 * var(--low))) 100%);
+  box-shadow: inset 0 0 calc(30px + 30px * var(--low)) calc(6px + 10px * var(--low)) rgba(255, 25, 45, 0.55);
+}
+.low-hp-vignette.on {
+  opacity: 1;
+  animation: low-hp-pulse calc(1.3s - 0.5s * var(--low)) ease-in-out infinite;
+}
+.low-hp-vignette.on.paused { animation-play-state: paused; }
+@keyframes low-hp-pulse {   /* 두 번 뛰고 쉬는 심장 박동 */
+  0%   { opacity: 0.4; }
+  14%  { opacity: 1; }
+  28%  { opacity: 0.55; }
+  42%  { opacity: 0.9; }
+  100% { opacity: 0.4; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .low-hp-vignette.on { animation: none; opacity: 0.8; }
+}
 
 #field {
   display: block;
