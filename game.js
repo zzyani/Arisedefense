@@ -1150,8 +1150,8 @@ const BOSS_RETRY = 2;          // 기술 대상이 없으면 이만큼 뒤 다�
 const GROUND_FLAT = 0.55;      // 바닥 원을 위에서 비스듬히 본 납작함 (예고 그림과 판정이 같도록)
 
 // 바닥 타원(가로 반경 R, 세로 R × GROUND_FLAT) 안에 있는가
-function inGroundEllipse(px, py, cx, cy, R) {
-  const dx = (px - cx) / R, dy = (py - cy) / (R * GROUND_FLAT);
+function inGroundEllipse(px, py, cx, cy, R, flat = GROUND_FLAT) {
+  const dx = (px - cx) / R, dy = (py - cy) / (R * flat);
   return dx * dx + dy * dy <= 1;
 }
 // 점 (px, py)에서 선분 (ax, ay)-(bx, by)까지 거리
@@ -1260,7 +1260,7 @@ function updateBossZones(state, boss, dt) {
     if (z.tick > 0) continue;
     z.tick += 0.5;
     for (const s of getAllShadows(state)) {
-      if (s.alive && inGroundEllipse(s.x, s.y, z.x, z.y, z.r)) bossHitShadow(state, boss, s, z.dps * 0.5);
+      if (s.alive && inGroundEllipse(s.x, s.y, z.x, z.y, z.r, z.flat)) bossHitShadow(state, boss, s, z.dps * 0.5);
     }
   }
   B.zones = B.zones.filter((z) => z.ttl > 0);
@@ -1277,16 +1277,17 @@ function startBossCast(state, B, d, e, type) {
     let best = null;
     for (const s of shadows) {
       if (dist(e.x, e.y, s.x, s.y) > S.range) continue;
-      const group = shadows.filter((o) => inGroundEllipse(o.x, o.y, s.x, s.y, S.radius));
+      const group = shadows.filter((o) => inGroundEllipse(o.x, o.y, s.x, s.y, S.radius, S.flat));
       const score = group.length * 1000 - dist(e.x, e.y, s.x, s.y);
       if (!best || score > best.score) best = { score, group };
     }
     if (!best) return retry();
     c.x = best.group.reduce((t, o) => t + o.x, 0) / best.group.length;
     c.y = best.group.reduce((t, o) => t + o.y, 0) / best.group.length;
-    const spit = addEffect(state, e.x, e.y, c.x, c.y, 'enemy', 'poisonSpit');   // 예고가 끝날 즈음 독 덩어리가 날아감
-    spit.ttl = spit.life = S.warn;
     faceToward(e, c.x);
+    const m = (SPRITES[d.id] && SPRITES[d.id].mouth) || { x: 0, y: 34 };   // 입 위치에서 출발 (그림마다 다름)
+    const spit = addEffect(state, e.x + (e.facing || 1) * m.x, spriteGroundY(e.y) - m.y, c.x, c.y, 'enemy', 'poisonSpit');   // 예고가 끝날 즈음 독 덩어리가 날아감
+    spit.ttl = spit.life = S.warn;
   } else if (type === 'ambush') {
     const target = shadows.slice().sort((a, b) => (a.hp - b.hp) || (a.uid - b.uid))[0];
     if (!target) return retry();
@@ -1364,7 +1365,10 @@ function stepBossCast(state, B, d, e, dt) {
         const tr = addEffect(state, e.x, e.y, e.x, e.y, 'enemy', 'dashTrail');
         tr.facing = e.facing;
       }
-      if (c.moved >= c.len) { releaseBossFromCore(e); c.phase = 'recover'; c.t = S.recover || 0; }
+      if (c.moved >= c.len) {   // 멈춤: 앞으로 미끄러지는 흙먼지
+        releaseBossFromCore(e); c.phase = 'recover'; c.t = c.recTotal = S.recover || 0;
+        const du = addEffect(state, e.x, e.y, e.x, e.y, 'enemy', 'dashDust'); du.facing = c.ux >= 0 ? 1 : -1;
+      }
     } else if (c.type === 'beam') {
       const p0 = c.prog || 0, p1 = Math.min(1, 1 - c.t / S.sweep);
       c.prog = p1;
@@ -1388,7 +1392,7 @@ function stepBossCast(state, B, d, e, dt) {
 
 // 예고가 끝나는 순간: 기술 발동
 function releaseBossCast(state, B, d, e, c, S) {
-  c.phase = 'recover'; c.t = S.recover || 0;
+  c.phase = 'recover'; c.t = c.recTotal = S.recover || 0;
   state.events.push(c.type === 'slam' ? 'BOSS_SLAM' : `BOSS_SKILL:${c.type}`);
   if (c.type === 'slam') {
     for (const s of getAllShadows(state)) {
@@ -1396,8 +1400,9 @@ function releaseBossCast(state, B, d, e, c, S) {
     }
     const fx = addEffect(state, e.x, e.y, e.x, e.y, 'enemy', 'bossSlam');
     fx.radius = S.radius; fx.color = d.color;
+    e.attackAt = state.elapsed;   // 내려찍는 동작 (기본 공격 줄)
   } else if (c.type === 'poison') {
-    B.zones.push({ x: c.x, y: c.y, r: S.radius, ttl: S.duration, dur: S.duration, dps: S.dps, tick: 0, color: d.color });
+    B.zones.push({ x: c.x, y: c.y, r: S.radius, flat: S.flat || GROUND_FLAT, ttl: S.duration, dur: S.duration, dps: S.dps, tick: 0, color: d.color });
     const fx = addEffect(state, c.x, c.y, c.x, c.y, 'enemy', 'poisonSplash');
     fx.radius = S.radius;
   } else if (c.type === 'ambush') {
@@ -1428,6 +1433,7 @@ function releaseBossCast(state, B, d, e, c, S) {
       fx.radius = S.radius; fx.seed = Math.random() * 1000;
     }
   } else if (c.type === 'dash' || c.type === 'beam') {
+    if (c.type === 'dash') { const du = addEffect(state, e.x, e.y, e.x, e.y, 'enemy', 'dashDust'); du.facing = c.ux >= 0 ? -1 : 1; }   // 박차고 나간 자리: 뒤로 튀는 흙먼지
     c.phase = 'act';
     c.t = c.type === 'beam' ? S.sweep : Infinity;
   }
@@ -1527,7 +1533,7 @@ function checkWaveComplete(state) {
 
 // 공격 연출 (게임 규칙에 영향 없음). style: 없으면 공격 선, 'claw'면 할퀴기 자국
 const LINE_FX_TIME = 0.12;
-const ATTACK_FX_TIME = { bossSlam: 0.5, poisonSplash: 0.5, iceShards: 0.45, ambushSlash: 0.4, frenzyWave: 0.7, lightning: 0.5, dashTrail: 0.35, devour: 0.9, claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36, bolt: 0.28, blast: 0.4, breath: 0.55, orb: 0.56, berclaw: 0.28, centclaw: 0.4, iceclaw: 0.42, icewave: 0.4, orcslash: 0.4, spear: 0.42, orcpunch: 0.46, axeslam: 0.42, rockspike: 0.44, hellbite: 0.42, clubslam: 0.44, curse: 0.6, reapwave: 0.5, antslash: 0.36, antclaw: 0.36, antblade: 0.44, acid: 0.42, queenstab: 0.34, crystalburst: 0.56, knightslash: 0.4, golemburst: 0.5, stonespell: 0.62, runebolt: 0.6, harpring: 0.62, stoneslash: 0.34 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
+const ATTACK_FX_TIME = { statueblast: 0.5, antkingclaw: 0.38, dashDust: 0.5, baranslash: 0.42, kargalsmash: 0.48, barukaslash: 0.36, kasakabite: 0.42, bossSlam: 0.5, poisonSplash: 0.6, iceShards: 0.55, ambushSlash: 0.42, frenzyWave: 0.7, lightning: 0.6, dashTrail: 0.35, devour: 0.9, claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36, bolt: 0.28, blast: 0.4, breath: 0.55, orb: 0.56, berclaw: 0.28, centclaw: 0.4, iceclaw: 0.42, icewave: 0.4, orcslash: 0.4, spear: 0.42, orcpunch: 0.46, axeslam: 0.42, rockspike: 0.44, hellbite: 0.42, clubslam: 0.44, curse: 0.6, reapwave: 0.5, antslash: 0.36, antclaw: 0.36, antblade: 0.44, acid: 0.42, queenstab: 0.34, crystalburst: 0.56, knightslash: 0.4, golemburst: 0.5, stonespell: 0.62, runebolt: 0.6, harpring: 0.62, stoneslash: 0.34 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
 const ORB_IMPACT_TIME = 0.18;   // 마력구가 닿은 뒤 터지며 흩어지는 시간(초)
 function addEffect(state, x1, y1, x2, y2, kind, style) {
   const ttl = ATTACK_FX_TIME[style] || LINE_FX_TIME;
@@ -1773,6 +1779,7 @@ const SPRITES = {
     },
   },
   'EN_001@ch2': {   // 2챕터 일반형 (얼음 엘프). 줄마다 몸 무게중심·발끝을 맞춰 96×54 칸으로 정렬, 쓰러짐 끝 프레임은 앞으로 쓰러지게
+                    //  보스 바루카(흰 머리·푸른 피부)와 헷갈리지 않게 머리카락·털은 청록빛, 망토는 짙은 청록으로 다시 칠함 (피부는 그대로)
     src: 'assets/sprites/en_001_ch2.png',
     cellW: 96, cellH: 54,
     scale: 1,
@@ -2446,8 +2453,8 @@ function drawSpriteFrame(ctx, cfg, tinted, animName, frame, x, y, facing, alpha,
 function hexRgb(hex) { const n = parseInt(hex.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
 
 // 바닥 예고 타원: 옅은 바탕 + 가운데서 차오르는 채움(다 차면 발동) + 점선 테두리. 끝에 가까울수록 빨리 깜빡임
-function drawGroundWarn(ctx, x, y, R, c, p, blink) {
-  const gy = spriteGroundY(y), ry = R * GROUND_FLAT;
+function drawGroundWarn(ctx, x, y, R, c, p, blink, flat = GROUND_FLAT) {
+  const gy = spriteGroundY(y), ry = R * flat;
   ctx.fillStyle = rgba(c, 0.10 + 0.08 * blink);
   ctx.beginPath(); ctx.ellipse(x, gy, R, ry, 0, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = rgba(c, 0.28);
@@ -2462,6 +2469,11 @@ function drawGroundWarn(ctx, x, y, R, c, p, blink) {
 const POISON_RGB = [90, 220, 100];
 function drawPoisonPool(ctx, z, T) {
   const age = z.dur - z.ttl;
+  const P = BOSS_FX.poisonPool;
+  if (P.img) {   // 그림: 터지는 독 구름이 걷힐 즈음(0.25초) 나타나 끝나기 0.6초 전부터 옅어짐. 기포·연기가 반복
+    const a = Math.max(0, Math.min(1, (age - 0.25) / 0.25)) * Math.min(1, z.ttl / 0.6);
+    return drawBossFx(ctx, P, Math.floor(T * P.fps + z.x) % P.frames, z.x, spriteGroundY(z.y), a);
+  }
   const a = Math.min(1, age / 0.2) * Math.min(1, z.ttl / 0.6);
   const gy = spriteGroundY(z.y), R = z.r * (0.8 + 0.2 * Math.min(1, age / 0.25)), ry = R * GROUND_FLAT;
   ctx.save();
@@ -2498,8 +2510,14 @@ function drawBossFloor(ctx, state) {
   for (const z of B.zones) drawPoisonPool(ctx, z, T);
   if (B.frenzy > 0) {   // 광란의 주술: 모든 적 발밑에 붉은 오라
     const fade = Math.min(1, B.frenzy / 0.5);
+    const AU = BOSS_FX.frenzyAura, d0 = findBossData(state.chapterId), age = (d0.skill.duration || 6) - B.frenzy;
     for (const m of state.enemies) {
       if (!m.alive) continue;
+      if (AU.img) {   // 그림: 나타남(0) → 반복(1~4, 적마다 박자 어긋나게) → 끝나기 0.25초 전 사라짐(5). 적 크기에 맞춰 늘림
+        const f = age < 0.12 ? 0 : B.frenzy < 0.25 ? 5 : 1 + Math.floor(T * AU.fps + m.uid) % 4;
+        drawBossFx(ctx, AU, f, m.x, spriteGroundY(m.y) - 1, 1, 0, Math.min(1.6, (m.radius + 8) / 22));
+        continue;
+      }
       const r = (m.radius + 8) * (m.isBoss ? 1.2 : 1), pulse = 0.5 + 0.5 * Math.sin(T * 10 + m.uid);
       const gy = spriteGroundY(m.y) - 1;
       ctx.fillStyle = `rgba(255, 40, 30, ${(0.16 + 0.12 * pulse) * fade})`;
@@ -2514,7 +2532,7 @@ function drawBossFloor(ctx, state) {
     const p = c.phase === 'warn' ? 1 - c.t / c.total : 1;
     const blink = 0.55 + 0.45 * Math.abs(Math.sin(T * (6 + 14 * p)));
     if (c.phase === 'warn' && c.type === 'slam') drawGroundWarn(ctx, e.x, e.y, S.radius, col, p, blink);
-    else if (c.phase === 'warn' && c.type === 'poison') drawGroundWarn(ctx, c.x, c.y, S.radius, POISON_RGB, p, blink);
+    else if (c.phase === 'warn' && c.type === 'poison') drawGroundWarn(ctx, c.x, c.y, S.radius, POISON_RGB, p, blink, S.flat);
     else if (c.phase === 'warn' && c.type === 'frenzy') {   // 주술 시전: 보스 발밑에 붉은 고리가 조여 듦
       const gy = spriteGroundY(e.y);
       for (const k of [1, 0.6]) {
@@ -2552,7 +2570,7 @@ function drawBossFloor(ctx, state) {
         ctx.strokeStyle = rgba(col, 0.6 + 0.4 * blink); ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
         sector(c.a0, a1, S.range); ctx.stroke(); ctx.setLineDash([]);
       } else {
-        ctx.fillStyle = 'rgba(255, 140, 40, 0.18)'; sector(c.a0, c.a0 + c.dir * S.arc * (c.prog || 0), S.range); ctx.fill();
+        ctx.fillStyle = rgba(col, 0.16); sector(c.a0, c.a0 + c.dir * S.arc * (c.prog || 0), S.range); ctx.fill();   // 지나간 자리 그을림 (보스 색)
       }
     }
   }
@@ -2607,9 +2625,36 @@ function drawBossOverlay(ctx, state) {
       ctx.beginPath(); ctx.ellipse(t.x, gy, r, r * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.stroke();
     }
   } else if (c.type === 'beam') {
-    const cfg = spriteFor(e.typeId, state.chapterId);
-    const ex = e.x, ey = cfg ? spriteTopY(cfg, e.y, 1) + 12 : e.y - 30;   // 눈 높이
-    if (c.phase === 'warn') {   // 눈에 빛이 모임
+    const cfg = spriteFor(e.typeId, state.chapterId), EB = BOSS_FX.eyeBeam;
+    const ex = cfg && cfg.eye ? e.x + (e.facing || 1) * cfg.eye.x : e.x;   // 눈 위치 (그림에 eye가 있으면 그 자리)
+    const ey = cfg && cfg.eye ? spriteGroundY(e.y) - cfg.eye.y : cfg ? spriteTopY(cfg, e.y, 1) + 12 : e.y - 30;
+    if (EB.img && c.phase !== 'recover' || EB.img && c.recTotal - c.t < 0.2) {   // 그림: 예고 = 눈에 섬광이 커짐, 훑기 = 늘린 광선 반복, 끝 = 흩어짐(0.2초)
+      const S = d.skill, a = c.a0 + c.dir * S.arc * (c.phase === 'warn' ? 0 : (c.prog || 1));
+      ctx.imageSmoothingEnabled = false;
+      ctx.shadowColor = 'rgba(255, 60, 60, 0.8)'; ctx.shadowBlur = 10;
+      if (c.phase === 'warn') {
+        const p = 1 - c.t / c.total, k = 0.18 + 0.3 * p;   // 눈에 작은 섬광이 모였다 커짐 (머리를 덮지 않게)
+        ctx.globalAlpha = 0.5 + 0.5 * p;
+        ctx.translate(ex, ey); ctx.scale(k, k);
+        ctx.drawImage(EB.img, 0, 0, EB.w, EB.h, -EB.ax, -EB.ay, EB.w, EB.h);
+      } else {
+        const tx = e.x + Math.cos(a) * S.range, ty = spriteGroundY(e.y) + Math.sin(a) * S.range;
+        const f = c.phase === 'act' ? 2 + Math.floor(T * 14) % 3 : 5;
+        ctx.translate(ex, ey); ctx.rotate(Math.atan2(ty - ey, tx - ex));
+        // 눈 섬광(출발점 둘레 R px)은 늘리지 않고 작게(k배) 눈에 두고, 그 바깥 광선 몸통만 섬광 끝에서 목표까지 가로로 늘림
+        //  (그림을 통째로 늘리면 섬광 뒤쪽 고리·가시가 머리 뒤로 길게 늘어나 머리 위에서 나오는 것처럼 보임)
+        const R = 60, k = 0.36, L = dist(ex, ey, tx, ty);
+        const sx = (L - R * k) / (EB.lens[f] - R);   // 원본 (출발점+R ~ 광선 끝) → 화면 (R·k ~ L)
+        ctx.save();
+        ctx.translate(R * k, 0); ctx.scale(sx, 0.38);
+        ctx.drawImage(EB.img, f * EB.w + EB.ax + R, 0, EB.w - EB.ax - R, EB.h, 0, -EB.ay, EB.w - EB.ax - R, EB.h);
+        ctx.restore();
+        ctx.scale(k, k);
+        ctx.drawImage(EB.img, f * EB.w + EB.ax - R, 0, R * 2, EB.h, -R, -EB.ay, R * 2, EB.h);
+      }
+    } else if (EB.img) {
+      // 그림이 있으면 후딜레이 나머지는 아무것도 그리지 않음
+    } else if (c.phase === 'warn') {   // 눈에 빛이 모임
       const p = 1 - c.t / c.total;
       const g = ctx.createRadialGradient(ex, ey, 0, ex, ey, 6 + 10 * p);
       g.addColorStop(0, `rgba(255, 250, 220, ${0.5 + 0.5 * p})`); g.addColorStop(1, 'rgba(255, 200, 80, 0)');
@@ -2632,6 +2677,27 @@ function drawBossOverlay(ctx, state) {
     }
   }
   ctx.restore();
+}
+
+// 보스 기술 동작 (그림에 cast 줄이 있을 때): 독액 뱉기는 고개를 들고 독을 모았다(0~2) 예고 끝 35%에 뱉음(3, 후딜레이까지 유지)
+//  광역 내려찍기는 예고 동안 고개를 들고(0~1), 발동하면 기본 공격(물기) 동작
+function bossCastPose(state, cfg) {
+  const c = state.boss && state.boss.cast, A = cfg.anims.cast;
+  if (!c || !A) return null;
+  const p = c.phase === 'warn' ? 1 - c.t / c.total : 1;
+  if (c.type === 'slam') return c.phase === 'warn' ? { anim: 'cast', frame: Math.min(1, Math.floor(p * 2)) } : null;
+  if (c.type === 'poison') return { anim: 'cast', frame: p < 0.65 ? Math.min(2, Math.floor(p / 0.65 * 3)) : 3 };
+  if (c.type === 'dash') {   // 돌진: 예고 동안 몸을 낮추고(0~2), 달리는 동안 돌진 자세(3), 멈춘 뒤 0.25초 몸을 일으킴(2)
+    if (c.phase === 'warn') return { anim: 'cast', frame: Math.min(2, Math.floor(p * 3)) };
+    if (c.phase === 'act') return { anim: 'cast', frame: 3 };
+    return (c.recTotal || 0) - c.t < 0.25 ? { anim: 'cast', frame: 2 } : null;
+  }
+  if (c.type === 'ambush') {   // 은신: 0.12초마다 한 장씩 사라져 안개(2)로 남음 → 순간이동하면 0.1초 동안 나타나는 모습(3) 뒤 찌르기(기본 공격 줄)
+    if (c.phase === 'warn') { const t = c.total - c.t; return { anim: 'cast', frame: t < 0.12 ? 0 : t < 0.24 ? 1 : 2 }; }
+    return (c.recTotal || 0) - c.t < 0.1 ? { anim: 'cast', frame: 3 } : null;
+  }
+  // 그 밖의 기술(광란의 주술 등): 예고 동안 마지막 앞 프레임까지 진행, 발동 뒤(후딜레이)에는 마지막 프레임
+  return { anim: 'cast', frame: c.phase === 'warn' ? Math.min(A.frames - 2, Math.floor(p * (A.frames - 1))) : A.frames - 1 };
 }
 
 // 은신 중 보스 투명도: 0.3초 동안 빠르게 옅어져 아른거림
@@ -2688,15 +2754,139 @@ function buildTintedSheet(img, color = EXTRACTED_TINT) {
   return c;
 }
 
-// 보스 임시 그림 (에셋을 받으면 교체): 그 챕터 중장갑형 그림을 1.5배로 그리고 보스 색을 덮음 + 보스 기운(윤곽 빛)
-//  1.5배는 고해상도 화면(2배)에서 도트 1칸 = 화면 3픽셀이라 고르게 보임
+// 1챕터 보스 카사카 (거대 독사, 남보랏빛 몸·주황 반점·노란 눈). 줄마다 똬리 무게중심·몸 아래를 맞춰 104×84 칸 (원본 2.6배 축소)
+//  cast 줄: 보스 기술을 쓰는 동안 (bossCastPose) — 0~1 고개를 듦, 2 입에 독이 차오름, 3 고개를 젖히고 독을 뱉음
+//  mouth: 독을 뱉는 입 위치 (몸 가운데 기준 앞으로 x, 발끝 기준 위로 y)
+SPRITES.BOSS_1 = {
+  src: 'assets/sprites/boss_1.png',
+  cellW: 104, cellH: 84,
+  scale: 1,
+  anchorX: 46,
+  bodyTop: 11,
+  shadow: { w: 30, h: 5, dx: -2 },
+  bossGlow: 'rgba(80, 255, 140, 0.55)',   // 독빛 초록 기운
+  attackFx: 'kasakabite',
+  mouth: { x: 30, y: 66 },
+  anims: {
+    idle:   { row: 0, frames: 4, fps: 4, groundY: 82 },
+    walk:   { row: 1, frames: 4, fps: 5, groundY: 82 },   // 꼬리를 흔들며 미끄러지듯
+    attack: { row: 2, frames: 5, fps: 9, strikeFrame: 3, strikeHold: 0.16, groundY: 82 },   // 0~2 고개를 들고 입을 벌림, 3 앞으로 물기(타격), 4 복귀
+    cast:   { row: 3, frames: 4, groundY: 82 },
+    hit:    { row: 4, frames: 2, fps: 10, groundY: 82 },
+    death:  { row: 5, frames: 5, fps: 7, groundY: 82 },   // 몸을 낮추다 바닥에 늘어짐
+  },
+};
+
+// 2챕터 보스 바루카 (얼음 엘프 암살자, 흰 머리·푸른 피부·쌍단검). 줄마다 몸 무게중심·발끝을 맞춰 104×78 칸 (원본 2.2배 축소)
+//  cast 줄: 은신 기습 — 0 손을 듦, 1~2 안개처럼 사라짐(2는 옅은 안개 실루엣), 3 나타남, 4 원래 모습 (반투명은 그림 그대로)
+SPRITES.BOSS_2 = {
+  src: 'assets/sprites/boss_2.png',
+  cellW: 104, cellH: 78,
+  scale: 1,
+  anchorX: 46,
+  bodyTop: 13,
+  shadow: { w: 18, h: 4, dx: 0 },
+  bossGlow: 'rgba(140, 220, 255, 0.55)',   // 얼음빛 기운
+  attackFx: 'barukaslash',
+  anims: {
+    idle:   { row: 0, frames: 4, fps: 5, groundY: 76 },
+    walk:   { row: 1, frames: 6, fps: 8, stride: 16, groundY: 76 },   // 느린 보스라 걸음에 맞춰 천천히
+    attack: { row: 2, frames: 5, fps: 9, strikeFrame: 2, strikeHold: 0.12, groundY: 76 },   // 0 자세, 1 단검을 뒤로, 2~3 앞으로 찌름(타격), 4 복귀
+    cast:   { row: 3, frames: 5, groundY: 76 },
+    hit:    { row: 4, frames: 2, fps: 10, groundY: 76 },
+    death:  { row: 5, frames: 5, fps: 7, groundY: 76 },
+  },
+};
+
+// 3챕터 보스 카르갈간 (하이 오크 주술사, 붉은 망토·뼈 장식·푸른 수정 지팡이). 줄마다 몸 무게중심·발끝을 맞춰 132×82 칸 (원본 2.6배 축소)
+//  cast 줄: 광란의 주술 — 0~1 지팡이를 쥠, 2~3 손을 앞으로 뻗음(시전), 4 복귀
+SPRITES.BOSS_3 = {
+  src: 'assets/sprites/boss_3.png',
+  cellW: 132, cellH: 82,
+  scale: 1,
+  anchorX: 56,
+  bodyTop: 11,
+  shadow: { w: 26, h: 4, dx: 0 },
+  bossGlow: 'rgba(90, 230, 220, 0.5)',   // 지팡이 수정빛 기운
+  attackFx: 'kargalsmash',
+  anims: {
+    idle:   { row: 0, frames: 4, fps: 4, groundY: 80 },
+    walk:   { row: 1, frames: 6, fps: 7, stride: 18, groundY: 80 },
+    attack: { row: 2, frames: 5, fps: 9, strikeFrame: 3, strikeHold: 0.1, groundY: 80 },   // 0 자세, 1~2 지팡이를 치켜듦, 3 앞으로 내려침(타격), 4 지팡이 끝이 땅에 닿음
+    cast:   { row: 3, frames: 5, groundY: 80 },
+    hit:    { row: 4, frames: 2, fps: 10, groundY: 80 },
+    death:  { row: 5, frames: 5, fps: 7, groundY: 80 },
+  },
+};
+
+// 4챕터 보스 바란 (악마왕, 큰 뿔·흰 불꽃 머리·금빛 갑옷·망토). 줄마다 몸 무게중심·발끝을 맞춰 148×80 칸 (원본 2.5배 축소)
+//  cast 줄: 낙뢰 — 0~1 자세, 2 두 팔을 벌려 번개를 두름, 3 손을 하늘로 (발동)
+SPRITES.BOSS_4 = {
+  src: 'assets/sprites/boss_4.png',
+  cellW: 148, cellH: 80,
+  scale: 1,
+  anchorX: 60,
+  bodyTop: 8,
+  shadow: { w: 24, h: 4, dx: 0 },
+  bossGlow: 'rgba(120, 170, 255, 0.55)',   // 푸른 번개빛 기운
+  attackFx: 'baranslash',
+  anims: {
+    idle:   { row: 0, frames: 4, fps: 4, groundY: 78 },
+    walk:   { row: 1, frames: 4, fps: 5, stride: 14, groundY: 78 },
+    attack: { row: 2, frames: 5, fps: 9, strikeFrame: 3, strikeHold: 0.12, groundY: 78 },   // 0 자세, 1~2 검을 뒤로 당김, 3 앞으로 베어 내림(타격), 4 검 끝이 땅을 긁음
+    cast:   { row: 3, frames: 4, groundY: 78 },
+    hit:    { row: 4, frames: 2, fps: 10, groundY: 78 },
+    death:  { row: 5, frames: 5, fps: 7, groundY: 78 },
+  },
+};
+
+// 5챕터 보스 개미왕 (검은 갑각·반투명 날개·붉은 눈). 줄마다 몸 무게중심·발끝을 맞춰 144×80 칸 (원본 2.4배 축소), 반투명 날개는 그대로
+//  cast 줄: 돌진 — 0 자세, 1~2 몸을 낮춤(예고), 3 돌진 자세(발밑 붉은 잔상)
+SPRITES.BOSS_5 = {
+  src: 'assets/sprites/boss_5.png',
+  cellW: 144, cellH: 80,
+  scale: 1,
+  anchorX: 64,
+  bodyTop: 6,
+  shadow: { w: 22, h: 4, dx: 0 },
+  bossGlow: 'rgba(255, 60, 90, 0.55)',   // 검붉은 기운
+  attackFx: 'antkingclaw',
+  anims: {
+    idle:   { row: 0, frames: 4, fps: 5, groundY: 78 },
+    walk:   { row: 1, frames: 4, fps: 6, stride: 14, groundY: 78 },
+    attack: { row: 2, frames: 5, fps: 10, strikeFrame: 3, strikeHold: 0.1, groundY: 78 },   // 0 자세, 1~2 발톱을 치켜듦, 3 앞으로 할큄(타격), 4 복귀
+    cast:   { row: 3, frames: 4, groundY: 78 },
+    hit:    { row: 4, frames: 2, fps: 10, groundY: 78 },
+    death:  { row: 5, frames: 5, fps: 7, groundY: 78 },
+  },
+};
+
+// 6챕터 보스 신상 (두건 쓴 석상, 푸른 룬이 빛나는 큰 날개·붉은 눈). 줄마다 발끝을 맞춰 136×80 칸 (원본 2.45배 축소)
+//  anchorX는 날개 쪽으로 쏠린 무게중심 대신 두건(몸) 쪽으로 맞춤. eye: 눈 위치 (몸 가운데 기준 앞으로 x, 발끝 기준 위로 y) = 눈 광선 출발점
+//  cast 줄: 눈 광선 — 0 자세, 1 손을 듦, 2~3 눈이 붉게 빛남 (훑는 동안 유지)
+SPRITES.BOSS_6 = {
+  src: 'assets/sprites/boss_6.png',
+  cellW: 136, cellH: 80,
+  scale: 1,
+  anchorX: 64,
+  bodyTop: 6,
+  shadow: { w: 22, h: 4, dx: 0 },
+  bossGlow: 'rgba(255, 90, 90, 0.5)',   // 붉은 눈빛 기운
+  attackFx: 'statueblast',
+  eye: { x: 13, y: 50 },   // 시전 프레임의 붉은 눈빛 앞쪽 끝 (얼굴의 눈)
+  anims: {
+    idle:   { row: 0, frames: 4, fps: 4, groundY: 78 },
+    walk:   { row: 1, frames: 4, fps: 5, stride: 14, groundY: 78 },
+    attack: { row: 2, frames: 5, fps: 9, strikeFrame: 3, strikeHold: 0.1, groundY: 78 },   // 0 자세, 1~2 손바닥을 앞으로, 3 몸을 숙여 손을 땅에 내리침(타격), 4 더 숙임
+    cast:   { row: 3, frames: 4, groundY: 78 },
+    hit:    { row: 4, frames: 2, fps: 10, groundY: 78 },
+    death:  { row: 5, frames: 5, fps: 7, groundY: 78 },
+  },
+};
+
+// 보스 임시 그림 (그림이 없는 보스를 새로 넣을 때): 그 챕터 중장갑형 그림을 1.5배로 그리고 보스 색을 덮음 + 보스 기운(윤곽 빛)
+//  예: BOSS_7: { base: 'EN_003@ch7', tint: 'rgba(…)', glow: 'rgba(…)' }. 지금은 6보스 모두 받은 그림이라 비어 있음
 const BOSS_LOOK = {
-  BOSS_1: { base: 'EN_003',     tint: 'rgba(40, 150, 80, 0.32)',   glow: 'rgba(80, 255, 140, 0.75)' },   // 카사카: 독빛 초록
-  BOSS_2: { base: 'EN_003@ch2', tint: 'rgba(60, 170, 255, 0.30)',  glow: 'rgba(140, 220, 255, 0.8)' },   // 바루카: 얼음빛
-  BOSS_3: { base: 'EN_003@ch3', tint: 'rgba(120, 160, 30, 0.30)',  glow: 'rgba(200, 255, 90, 0.7)' },    // 카르갈간: 주술 초록
-  BOSS_4: { base: 'EN_003@ch4', tint: 'rgba(200, 20, 20, 0.30)',   glow: 'rgba(255, 70, 50, 0.8)' },     // 바란: 핏빛
-  BOSS_5: { base: 'EN_003@ch5', tint: 'rgba(120, 10, 30, 0.40)',   glow: 'rgba(255, 50, 90, 0.75)' },    // 개미왕: 검붉은빛
-  BOSS_6: { base: 'EN_003@ch6', tint: 'rgba(230, 180, 60, 0.32)',  glow: 'rgba(255, 210, 100, 0.8)' },   // 신상: 금빛
 };
 for (const [id, look] of Object.entries(BOSS_LOOK)) {
   const base = SPRITES[look.base];
@@ -3657,7 +3847,100 @@ const STONESLASH_FX = {
   reach: 23,     // 바라보는 쪽으로 떨어진 거리(px): 그림 가운데에서 8px 앞이 맞는 점 → 단검 끝(몸에서 31px 앞)에 옴
   upright: true, // 위아래 반전 안 함
 };
-const ATTACK_FX = { stoneslash: STONESLASH_FX, harpring: HARPRING_FX, golemburst: GOLEMBURST_FX, knightslash: KNIGHTSLASH_FX, crystalburst: CRYSTALBURST_FX, queenstab: QUEENSTAB_FX, antblade: ANTBLADE_FX, antclaw: ANTCLAW_FX, antslash: ANTSLASH_FX, reapwave: REAPWAVE_FX, clubslam: CLUBSLAM_FX, hellbite: HELLBITE_FX, rockspike: ROCKSPIKE_FX, axeslam: AXESLAM_FX, orcpunch: ORCPUNCH_FX, orcslash: ORCSLASH_FX, icewave: ICEWAVE_FX, iceclaw: ICECLAW_FX, claw: CLAW_FX, slash: SLASH_FX, ice: ICE_FX, bearclaw: BEARCLAW_FX, slam: SLAM_FX, bite: BITE_FX, berclaw: BERCLAW_FX, centclaw: CENTCLAW_FX };
+// 카사카 물기 (assets/sprites/fx_kasakabite.png, 64×46 도트 6프레임, 원본 6배 축소): 독니가 벌어졌다 닫히며 물고(3번째에 독이 튐) 흩어짐. 보스 입 앞에
+const KASAKABITE_FX = {
+  src: 'assets/sprites/fx_kasakabite.png', w: 64, h: 46, frames: 6,
+  rows: { enemy: 0 },
+  glow: { enemy: 'rgba(110, 255, 120, 0.5)' },
+  bodyLift: 32,  // 판정 위치에서 위로(px) = 물기 프레임의 입 높이
+  reach: 46,     // 바라보는 쪽으로 = 입 끝 바로 앞
+  upright: true,
+};
+// 카사카 독액 뱉기 그림 (보스 고유 기술, 그림이 없으면 PROC_FX가 코드로 그림)
+//  spit: 날아가는 독 덩어리 56×30 5프레임 (원본 7배 축소, 머리 = 칸의 ax·ay), 날아가는 방향으로 돌려 그림
+//  burst: 땅에 터지는 독 132×106 6프레임 (원본 2.6배 축소, 웅덩이 가운데 = ax·ay)
+//  pool: 독 웅덩이 116×98 6프레임 반복 (원본 2.45배 축소, 웅덩이 가운데 = ax·ay, 웅덩이 폭 약 110 = 반경 55)
+const BOSS_FX = {
+  // 신상: eyeBeam = 눈 광선 222×108 6프레임 (원본 2배 축소, 출발점 = 눈 섬광 가운데 ax·ay, 오른쪽으로 뻗음)
+  //       0 눈에 섬광(예고), 1 짧게 뻗음, 2~4 광선(훑는 동안 반복), 5 흩어짐. lens = 프레임마다 출발점에서 광선 끝까지 길이 → 실제 길이에 맞춰 가로로 늘림
+  eyeBeam:     { src: 'assets/sprites/fx_eyebeam.png',     w: 222, h: 108, frames: 6, ax: 72, ay: 56, lens: [37, 70, 108, 146, 120, 129] },
+  // 개미왕: dashDust = 돌진 흙먼지 96×66 6프레임 (원본 4.5배 축소, 바닥 가운데), 오른쪽으로 휘어 오름 → facing으로 뒤집음
+  dashDust:    { src: 'assets/sprites/fx_dashdust.png',    w: 96,  h: 66,  frames: 6, ax: 52, ay: 60 },
+  // 바란: lightning = 낙뢰 84×132 6프레임 (원본 5배 축소, 바닥 터짐 가운데 = 표식 자리). 아군 그림자 보라와 헷갈리지 않게 보랏빛을 파란 쪽으로 옮김
+  lightning:   { src: 'assets/sprites/fx_lightning.png',   w: 84,  h: 132, frames: 6, ax: 42, ay: 120 },
+  // 카르갈간: frenzyWave = 광란의 주술 시전 (발밑 마법진에서 수정빛 기운이 솟음) 108×96 6프레임 (원본 4배 축소, 마법진 가운데)
+  //           frenzyAura = 광란 중 적 발밑 붉은 고리 64×64 6프레임 (원본 5배 축소, 고리 가운데): 0 나타남, 1~4 반복, 5 사라짐. 적 크기에 맞춰 늘려 그림
+  frenzyWave:  { src: 'assets/sprites/fx_frenzywave.png',  w: 108, h: 96, frames: 6, ax: 54, ay: 80 },
+  frenzyAura:  { src: 'assets/sprites/fx_frenzyaura.png',  w: 64,  h: 64, frames: 6, ax: 32, ay: 46, fps: 8 },
+  // 바루카: xSlash = 기습 X자 베기 60×50 6프레임 (원본 6.4배 축소, 가운데 = 맞은 그림자 몸), iceShards = 사라진 자리 얼음 파편 64×54 7프레임 (원본 4.4배 축소, 바닥 고리 가운데)
+  xSlash:      { src: 'assets/sprites/fx_ambushslash.png', w: 60, h: 50, frames: 6, ax: 30, ay: 25 },
+  iceShards:   { src: 'assets/sprites/fx_iceshards.png',   w: 64, h: 54, frames: 7, ax: 32, ay: 44 },
+  poisonSpit:  { src: 'assets/sprites/fx_poisonspit.png',  w: 56,  h: 30,  frames: 5, ax: 46, ay: 15 },
+  poisonBurst: { src: 'assets/sprites/fx_poisonburst.png', w: 132, h: 106, frames: 6, ax: 66, ay: 88 },
+  poisonPool:  { src: 'assets/sprites/fx_poisonpool.png',  w: 116, h: 98,  frames: 6, ax: 58, ay: 72, fps: 7 },
+};
+// 보스 기술 그림 한 프레임: 칸의 기준점(ax, ay)을 (x, y)에 맞춤. rot이 있으면 그만큼 돌림 (도트가 번지지 않게 회전 없을 때만 픽셀 맞춤)
+function drawBossFx(ctx, S, frame, x, y, alpha = 1, rot = 0, scale = 1) {
+  if (!S || !S.img || alpha <= 0) return false;
+  const k = ctx.getTransform().a;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.globalAlpha *= alpha;
+  ctx.translate(rot ? x : Math.round(x * k) / k, rot ? y : Math.round(y * k) / k);
+  if (rot) ctx.rotate(rot);
+  if (scale !== 1) ctx.scale(scale, scale);
+  ctx.drawImage(S.img, frame * S.w, 0, S.w, S.h, -S.ax, -S.ay, S.w, S.h);
+  ctx.restore();
+  return true;
+}
+// 바루카 단검 베기 (assets/sprites/fx_barukaslash.png, 60×36 도트 6프레임, 원본 6배 축소): 얼음빛 초승달이 앞으로 휘둘러지고 얼음 조각이 흩어짐
+const BARUKASLASH_FX = {
+  src: 'assets/sprites/fx_barukaslash.png', w: 60, h: 36, frames: 6,
+  rows: { enemy: 0 },
+  glow: { enemy: 'rgba(140, 220, 255, 0.55)' },
+  bodyLift: 18,  // 찌르는 팔 높이
+  reach: 38,     // 단검 끝 근처
+  upright: true,
+};
+// 카르갈간 지팡이 내려치기 (assets/sprites/fx_kargalsmash.png, 72×124 도트 6프레임, 원본 5배 축소): 붉은 호를 그리며 내려쳐 땅이 터지고 고리가 남음
+//  칸 가운데 = 땅에 닿는 점 (그림은 위쪽 절반에만 있음)
+const KARGALSMASH_FX = {
+  src: 'assets/sprites/fx_kargalsmash.png', w: 72, h: 124, frames: 6,
+  rows: { enemy: 0 },
+  glow: { enemy: 'rgba(255, 70, 50, 0.5)' },
+  bodyLift: -12, // 칸 가운데를 발끝 높이(판정 위치 아래 12px)에
+  reach: 50,     // 지팡이 머리가 땅에 닿는 곳
+  upright: true,
+};
+// 바란 번개 베기 (assets/sprites/fx_baranslash.png, 90×60 도트 6프레임, 원본 6배 축소, 보랏빛은 파란 쪽으로): 검을 베어 내리며 번개가 갈라지고 땅이 번쩍
+const BARANSLASH_FX = {
+  src: 'assets/sprites/fx_baranslash.png', w: 90, h: 60, frames: 6,
+  rows: { enemy: 0 },
+  glow: { enemy: 'rgba(120, 170, 255, 0.55)' },
+  bodyLift: 12,  // 그림 아래쪽(땅 번쩍임)이 발끝 높이에 오게
+  reach: 40,
+  upright: true,
+};
+// 개미왕 할퀴기 (assets/sprites/fx_antkingclaw.png, 72×56 도트 6프레임, 원본 7배 축소): 붉은 발톱 자국 세 줄이 그어지고 검붉은 피가 튐
+const ANTKINGCLAW_FX = {
+  src: 'assets/sprites/fx_antkingclaw.png', w: 72, h: 56, frames: 6,
+  rows: { enemy: 0 },
+  glow: { enemy: 'rgba(255, 60, 90, 0.5)' },
+  bodyLift: 26,  // 뻗은 발톱 높이
+  reach: 46,
+  upright: true,
+};
+// 신상 손바닥 내려치기 (assets/sprites/fx_statueblast.png, 112×164 도트 6프레임, 원본 4배 축소): 땅에 푸른 마법진이 퍼지며 돌과 빛이 솟음
+//  칸 가운데 = 마법진 가운데 (그림은 위쪽 절반에만 있음)
+const STATUEBLAST_FX = {
+  src: 'assets/sprites/fx_statueblast.png', w: 112, h: 164, frames: 6,
+  rows: { enemy: 0 },
+  glow: { enemy: 'rgba(110, 170, 255, 0.5)' },
+  bodyLift: -12, // 칸 가운데를 발끝 높이에
+  reach: 40,     // 땅을 짚은 손 (커진 마법진이 보스 발밑까지 겹치지 않게 조금 앞으로)
+  upright: true,
+};
+const ATTACK_FX = { statueblast: STATUEBLAST_FX, antkingclaw: ANTKINGCLAW_FX, baranslash: BARANSLASH_FX, kargalsmash: KARGALSMASH_FX, barukaslash: BARUKASLASH_FX, kasakabite: KASAKABITE_FX, stoneslash: STONESLASH_FX, harpring: HARPRING_FX, golemburst: GOLEMBURST_FX, knightslash: KNIGHTSLASH_FX, crystalburst: CRYSTALBURST_FX, queenstab: QUEENSTAB_FX, antblade: ANTBLADE_FX, antclaw: ANTCLAW_FX, antslash: ANTSLASH_FX, reapwave: REAPWAVE_FX, clubslam: CLUBSLAM_FX, hellbite: HELLBITE_FX, rockspike: ROCKSPIKE_FX, axeslam: AXESLAM_FX, orcpunch: ORCPUNCH_FX, orcslash: ORCSLASH_FX, icewave: ICEWAVE_FX, iceclaw: ICECLAW_FX, claw: CLAW_FX, slash: SLASH_FX, ice: ICE_FX, bearclaw: BEARCLAW_FX, slam: SLAM_FX, bite: BITE_FX, berclaw: BERCLAW_FX, centclaw: CENTCLAW_FX };
 
 // 잔영 (assets/sprites/remnant.png): 보랏빛 그림자 불꽃 6프레임 반복. 파일이 없으면 기존 원형으로 그림
 //  - 바닥 웅덩이를 쓰러진 적의 발밑에 맞춤. 클릭 판정(잔영 위치 반경 16px)은 그대로
@@ -3702,7 +3985,16 @@ const PROC_FX = {
   poisonSpit(ctx, fx) {
     const p = Math.min(1, (fx.life - fx.ttl) / fx.life);
     if (p < 0.65) return;
-    const q = (p - 0.65) / 0.35, x1 = fx.x1, y1 = fx.y1 - 22, x2 = fx.x2, y2 = spriteGroundY(fx.y2);
+    const q = (p - 0.65) / 0.35, x1 = fx.x1, y1 = fx.y1, x2 = fx.x2, y2 = spriteGroundY(fx.y2);   // 입(x1, y1) → 웅덩이 자리 땅
+    if (BOSS_FX.poisonSpit.img) {   // 그림: 포물선을 따라 날아가는 방향으로 돌리고, 날아갈수록 덩어리가 커짐
+      const at = (t) => [x1 + (x2 - x1) * t, y1 + (y2 - y1) * t - Math.sin(Math.PI * t) * 45];
+      const [x, y] = at(q);
+      const rot = Math.atan2((y2 - y1) - 45 * Math.PI * Math.cos(Math.PI * q), x2 - x1);   // 포물선의 접선 방향
+      ctx.save(); ctx.shadowColor = 'rgba(110, 255, 120, 0.7)'; ctx.shadowBlur = 6;
+      drawBossFx(ctx, BOSS_FX.poisonSpit, Math.min(4, Math.floor(q * 5)), x, y, 1, rot);
+      ctx.restore();
+      return;
+    }
     ctx.save();
     ctx.shadowColor = 'rgba(90, 255, 110, 0.9)'; ctx.shadowBlur = 8;
     for (let k = 0; k < 3; k++) {   // 덩어리 + 뒤따르는 방울 2개
@@ -3716,6 +4008,7 @@ const PROC_FX = {
   // 독이 땅에 터짐: 퍼지는 고리 + 튀는 방울
   poisonSplash(ctx, fx) {
     const p = Math.min(1, (fx.life - fx.ttl) / fx.life), gy = spriteGroundY(fx.y1), R = fx.radius * (0.3 + 0.9 * Math.sqrt(p));
+    if (drawBossFx(ctx, BOSS_FX.poisonBurst, Math.min(5, Math.floor(p * 6)), fx.x1, gy, p > 0.85 ? (1 - p) / 0.15 : 1)) return;   // 그림: 터짐 → 독 구름 → 흩어짐
     ctx.save();
     ctx.strokeStyle = `rgba(150, 255, 150, ${1 - p})`; ctx.lineWidth = 3 * (1 - p) + 1;
     ctx.beginPath(); ctx.ellipse(fx.x1, gy, R, R * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.stroke();
@@ -3729,6 +4022,7 @@ const PROC_FX = {
   // 바루카가 사라진 자리: 얼음 파편이 흩어지고 냉기가 퍼짐
   iceShards(ctx, fx) {
     const p = Math.min(1, (fx.life - fx.ttl) / fx.life), cy = fx.y1 - 6;
+    if (drawBossFx(ctx, BOSS_FX.iceShards, Math.min(6, Math.floor(p * 7)), fx.x1, spriteGroundY(fx.y1))) return;   // 그림: 얼음이 터져 흩어지고 고리가 옅어짐
     ctx.save();
     ctx.fillStyle = `rgba(190, 235, 255, ${0.3 * (1 - p)})`;
     ctx.beginPath(); ctx.ellipse(fx.x1, spriteGroundY(fx.y1), 24 + 16 * p, (24 + 16 * p) * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.fill();
@@ -3743,6 +4037,7 @@ const PROC_FX = {
   // 바루카 기습 베기: 대상 위에 X자로 두 번 베고 얼음빛이 남음
   ambushSlash(ctx, fx) {
     const p = Math.min(1, (fx.life - fx.ttl) / fx.life), x = fx.x2, y = fx.y2 - 10, L = 26;
+    if (drawBossFx(ctx, BOSS_FX.xSlash, Math.min(5, Math.floor(p * 6)), x, fx.y2 - 4)) return;   // 그림: 맞은 그림자 몸 위에 X자로 두 번 벰
     ctx.save();
     ctx.lineCap = 'round'; ctx.shadowColor = 'rgba(140, 220, 255, 1)'; ctx.shadowBlur = 10;
     [[-1, 0], [1, 0.25]].forEach(([dir, delay]) => {
@@ -3761,6 +4056,7 @@ const PROC_FX = {
   // 카르갈간 광란의 주술: 붉은 충격파 두 겹이 퍼짐 + 솟는 핏빛 기운
   frenzyWave(ctx, fx) {
     const p = Math.min(1, (fx.life - fx.ttl) / fx.life), gy = spriteGroundY(fx.y1);
+    const art = drawBossFx(ctx, BOSS_FX.frenzyWave, Math.min(5, Math.floor(p * 6)), fx.x1, gy);   // 그림: 발밑 마법진에서 기운이 솟음 (그 위에 화면 전체로 퍼지는 붉은 고리)
     ctx.save();
     ctx.shadowColor = 'rgba(255, 50, 30, 0.9)'; ctx.shadowBlur = 12;
     for (const [k, w] of [[1, 4], [0.65, 2]]) {
@@ -3769,7 +4065,7 @@ const PROC_FX = {
       ctx.beginPath(); ctx.ellipse(fx.x1, gy, R, R * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.stroke();
     }
     ctx.fillStyle = `rgba(255, 90, 60, ${0.8 * (1 - p)})`;
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < (art ? 0 : 10); i++) {
       const a = i / 10 * Math.PI * 2, r = 18 + 10 * (i % 3);
       ctx.fillRect(fx.x1 + Math.cos(a) * r - 1, gy + Math.sin(a) * r * GROUND_FLAT - 50 * p - (i % 4) * 6, 2, 6);
     }
@@ -3778,6 +4074,7 @@ const PROC_FX = {
   // 바란 낙뢰: 하늘에서 지그재그로 내리꽂힘(두 번 번쩍) + 땅이 터짐
   lightning(ctx, fx) {
     const p = Math.min(1, (fx.life - fx.ttl) / fx.life), gy = spriteGroundY(fx.y1), x = fx.x1;
+    if (drawBossFx(ctx, BOSS_FX.lightning, Math.min(5, Math.floor(p * 6)), x, gy)) return;   // 그림: 하늘에서 내리꽂혀 굵어졌다 흩어지고 땅이 터짐
     ctx.save();
     const on = p < 0.14 || (p > 0.2 && p < 0.42);
     if (on) {
@@ -3805,10 +4102,20 @@ const PROC_FX = {
     const p = Math.min(1, (fx.life - fx.ttl) / fx.life);
     const B = state && state.boss, e = B && state.enemies.find((x) => x.uid === B.uid);
     const cfg = e ? spriteFor(e.typeId, state.chapterId) : null;
-    if (cfg) drawSpriteFrame(ctx, cfg, false, 'walk', 2, fx.x1, fx.y1, fx.facing || 1, 0.35 * (1 - p), 1, 0, null);
+    if (cfg) drawSpriteFrame(ctx, cfg, false, cfg.anims.cast ? 'cast' : 'walk', cfg.anims.cast ? 3 : 2, fx.x1, fx.y1, fx.facing || 1, 0.35 * (1 - p), 1, 0, null);   // 돌진 자세 잔상
+    if (BOSS_FX.dashDust.img) return;   // 그림이 있으면 흙먼지는 출발·멈춤 때만 (dashDust)
     ctx.save();
     ctx.fillStyle = `rgba(150, 110, 80, ${0.35 * (1 - p)})`;
     ctx.beginPath(); ctx.ellipse(fx.x1, spriteGroundY(fx.y1), 10 + 12 * p, (10 + 12 * p) * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  },
+  // 개미왕 돌진 흙먼지 (그림): facing 쪽으로 물결이 휘어 오름. 출발 때는 뒤로, 멈출 때는 앞으로
+  dashDust(ctx, fx) {
+    const p = Math.min(1, (fx.life - fx.ttl) / fx.life), S = BOSS_FX.dashDust;
+    if (!S.img) return;
+    ctx.save();
+    ctx.translate(fx.x1, spriteGroundY(fx.y1)); ctx.scale(fx.facing || 1, 1);
+    drawBossFx(ctx, S, Math.min(5, Math.floor(p * 6)), 0, 0);
     ctx.restore();
   },
   // 개미왕 포식: 쓰러진 그림자에서 붉은 빛이 보스에게 빨려 들어감 + 회복량
@@ -4116,7 +4423,7 @@ function syncLowHpVignette(st) {
 }
 
 function loadFxSheets() {
-  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, SLAM_FX, BITE_FX, BERCLAW_FX, CENTCLAW_FX, ICECLAW_FX, ICEWAVE_FX, ORCSLASH_FX, SPEAR_FX, ORCPUNCH_FX, AXESLAM_FX, ROCKSPIKE_FX, HELLBITE_FX, CLUBSLAM_FX, CURSE_FX, REAPWAVE_FX, ANTSLASH_FX, ANTCLAW_FX, ANTBLADE_FX, ACID_FX, QUEENSTAB_FX, CRYSTALBURST_FX, KNIGHTSLASH_FX, GOLEMBURST_FX, STONESPELL_FX, RUNEBOLT_FX, HARPRING_FX, STONESLASH_FX, BREATH_FX, ORB_FX, REMNANT_FX, DEMON_WINDOWS, ANT_GLOW, ...Object.values(CORE_SPRITES)]) {
+  for (const fx of [CLAW_FX, SLASH_FX, ICE_FX, BEARCLAW_FX, SLAM_FX, BITE_FX, BERCLAW_FX, CENTCLAW_FX, ICECLAW_FX, ICEWAVE_FX, ORCSLASH_FX, SPEAR_FX, ORCPUNCH_FX, AXESLAM_FX, ROCKSPIKE_FX, HELLBITE_FX, CLUBSLAM_FX, CURSE_FX, REAPWAVE_FX, ANTSLASH_FX, ANTCLAW_FX, ANTBLADE_FX, ACID_FX, QUEENSTAB_FX, CRYSTALBURST_FX, KNIGHTSLASH_FX, GOLEMBURST_FX, STONESPELL_FX, RUNEBOLT_FX, HARPRING_FX, STONESLASH_FX, KASAKABITE_FX, BARUKASLASH_FX, KARGALSMASH_FX, BARANSLASH_FX, ANTKINGCLAW_FX, STATUEBLAST_FX, ...Object.values(BOSS_FX), BREATH_FX, ORB_FX, REMNANT_FX, DEMON_WINDOWS, ANT_GLOW, ...Object.values(CORE_SPRITES)]) {
     const img = new Image();
     img.onload = () => { fx.img = fx.shade ? buildTintedSheet(img, fx.shade) : img; };
     img.onerror = () => console.warn(`[이펙트 불러오기 실패] ${fx.src}`);
@@ -4466,8 +4773,8 @@ function render(ctx, state, view) {
     const clipTop = spawnClipTop(e.spawn, state.chapterId);   // 출현 연출: 지정한 선 위쪽은 가려서 문·벽·굴 아래에서 나오는 것처럼
     const cfg = spriteFor(e.typeId, state.chapterId);
     if (cfg) {   // 스프라이트: 이동·공격·피격 애니메이션
-      const pick = pickAnim(e, state.elapsed, e.moving, cfg, !e.moving);
-      const alpha = e.stealth ? stealthAlpha(state) : 1;   // 바루카 은신: 거의 투명
+      const pick = (e.isBoss && bossCastPose(state, cfg)) || pickAnim(e, state.elapsed, e.moving, cfg, !e.moving);
+      const alpha = !e.stealth ? 1 : cfg.anims.cast ? 0.75 : stealthAlpha(state);   // 바루카 은신: 그림이 있으면 사라지는 동작(옅은 안개), 없으면 거의 투명
       withClip(ctx, clipTop, () => {
         drawGroundShadow(ctx, cfg, pick.anim, pick.frame, e.x, e.y, alpha, 1, GROUND_SHADOW);
         drawSpriteFrame(ctx, cfg, false, pick.anim, pick.frame, e.x, e.y, e.facing || 1, alpha, 1, pick.bob, hitFx(e.hitAt, state.elapsed));

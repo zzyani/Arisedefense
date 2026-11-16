@@ -95,6 +95,7 @@ const GAME_DATA = {
   //  skill: 보스 고유 기술. slam과 겹치지 않고 하나씩만 씀(끝나면 서로 최소 2초 간격). first초 뒤 첫 사용, 재사용은 발동 순간부터 cooldown초
   //         warn초 예고(보스 정지) → 발동 → recover초 쉼. 대상이 없으면 2초 뒤 다시 시도
   //    poison    독액 뱉기: range 안에서 그림자가 가장 많이 모인 곳에 독 웅덩이(반경 radius)를 duration초. 안의 그림자는 0.5초마다 dps/2 피해
+  //              flat: 웅덩이 타원의 세로/가로 비율 (웅덩이 그림에 맞춤, 예고 타원·판정도 같음)
   //    ambush    은신 기습: 반투명해져 공격받지 않음, HP가 가장 낮은 그림자에 표식 → 그 뒤로 순간이동해 damage (예고 중 대상이 사라지면 취소)
   //    frenzy    광란의 주술: 화면의 모든 적·보스가 duration초 동안 공격·이동 속도 haste배. 부하 소환 afterSummon초 뒤에도 씀
   //    lightning 낙뢰: 그림자 count기(분노 시 enragedCount기) 자리에 표식 → 표식 반경 radius 안 그림자에게 damage (표식은 그 자리에 고정)
@@ -109,16 +110,16 @@ const GAME_DATA = {
     { id: 'BOSS_1', chapterId: 1, spawn: 'W', name: '카사카',   maxHp: 2600,  attack: 13, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#3fae6a', reward: 50,
       summons: [{ at: 0.7, enemies: ['EN_001', 'EN_001', 'EN_002'] }, { at: 0.4, enemies: ['EN_001', 'EN_001', 'EN_003'] }],
       slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 22, cooldown: 13, enragedCooldown: 9, enrageAt: 0.4 },
-      skill: { type: 'poison', name: '독액 뱉기', first: 5, cooldown: 12, warn: 1.2, recover: 0.4, range: 320, radius: 55, duration: 4, dps: 10 } },
+      skill: { type: 'poison', name: '독액 뱉기', first: 5, cooldown: 12, warn: 1.2, recover: 0.4, range: 320, radius: 55, flat: 0.38, duration: 4, dps: 10 } },
     { id: 'BOSS_2', chapterId: 2, spawn: 'E', name: '바루카',   maxHp: 3400,  attack: 15, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#8fd8ff', reward: 50,
       summons: [{ at: 0.7, enemies: ['EN_001', 'EN_001', 'EN_002'] }, { at: 0.4, enemies: ['EN_001', 'EN_001', 'EN_003'] }],
       slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 25, cooldown: 13, enragedCooldown: 9, enrageAt: 0.4 },
       skill: { type: 'ambush', name: '은신 기습', first: 6, cooldown: 11, warn: 1.0, recover: 0.5, damage: 55 } },
-    { id: 'BOSS_3', chapterId: 3, spawn: 'W', name: '카르갈간', maxHp: 4400,  attack: 17, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#7fae3a', reward: 50,
+    { id: 'BOSS_3', chapterId: 3, spawn: 'W', name: '카르갈간', maxHp: 4400,  attack: 17, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#4fd0c8', reward: 50,
       summons: [{ at: 0.7, enemies: ['EN_001', 'EN_001', 'EN_002'] }, { at: 0.4, enemies: ['EN_001', 'EN_004', 'EN_003'] }],
       slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 28, cooldown: 13, enragedCooldown: 9, enrageAt: 0.4 },
       skill: { type: 'frenzy', name: '광란의 주술', first: 7, cooldown: 14, warn: 0.8, recover: 0.3, duration: 6, haste: 1.4, afterSummon: 1 } },
-    { id: 'BOSS_4', chapterId: 4, spawn: 'E', name: '바란',     maxHp: 5400,  attack: 19, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#ff4a3a', reward: 50,
+    { id: 'BOSS_4', chapterId: 4, spawn: 'E', name: '바란',     maxHp: 5400,  attack: 19, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#6ea8ff', reward: 50,
       summons: [{ at: 0.7, enemies: ['EN_001', 'EN_002', 'EN_004'] }, { at: 0.4, enemies: ['EN_001', 'EN_005', 'EN_003'] }],
       slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 32, cooldown: 13, enragedCooldown: 9, enrageAt: 0.4 },
       skill: { type: 'lightning', name: '낙뢰', first: 5, cooldown: 11, warn: 1.2, recover: 0.3, count: 3, enragedCount: 4, radius: 28, damage: 24 } },
@@ -127,7 +128,7 @@ const GAME_DATA = {
       slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 36, cooldown: 13, enragedCooldown: 9, enrageAt: 0.4 },
       skill: { type: 'dash', name: '돌진', first: 5, cooldown: 12, warn: 1.0, recover: 0.6, length: 160, width: 40, speed: 520, damage: 30 },
       devour: 0.02 },
-    { id: 'BOSS_6', chapterId: 6, spawn: 'E', name: '신상',     maxHp: 8000, attack: 24, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#ffd166', reward: 50,
+    { id: 'BOSS_6', chapterId: 6, spawn: 'E', name: '신상',     maxHp: 8000, attack: 24, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#ff5a5a', reward: 50,
       summons: [{ at: 0.7, enemies: ['EN_001', 'EN_002', 'EN_006'] }, { at: 0.4, enemies: ['EN_004', 'EN_005', 'EN_003'] }],
       slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 42, cooldown: 13, enragedCooldown: 9, enrageAt: 0.4 },
       skill: { type: 'beam', name: '눈 광선', first: 12, cooldown: 15, warn: 1.5, sweep: 1.0, recover: 0.4, range: 240, arc: 1.2, damage: 26 } },
