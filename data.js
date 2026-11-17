@@ -63,13 +63,15 @@ const GAME_DATA = {
   //  charge: 있으면 배치한 자리를 지키다가 적에게 달려가 붙어서 공격 (베르). speed 이동 속도, search 자기 둘레 탐색 반경,
   //          leash 배치한 자리에서 움직일 수 있는 최대 거리. 적이 없으면 돌아오고, 웨이브가 끝나면 배치한 자리로
   //  cardImage·attackFx·스프라이트가 없으면 카드는 색 띠만, 공격은 기본 연출(공격 선·탄환·폭발 원)로 표시
+  // 밸런스(카드): 웹툰 역할에 맞춰 사거리 순서를 아이언 80 < 이그리트 90 < 탱크 95(몸 둘레 범위) < 원거리 어금니·카이셀 170으로.
+  //  아이언·탱크는 HP를 올린 탱커, 이그리트는 단일 대상 초당 피해 1위(67). 사거리를 60~75로 더 줄이면 거점 둘레에 빈틈이 생겨 크게 어려워짐
   shadows: [
-    { id: 'SH_001', name: '아이언',   role: 'tank',   cost: 30, maxHp: 300, attack: 20, attackInterval: 1.5, attackRange: 100, targetType: 'single',       color: '#4f86ff', attackFx: 'slam', cardImage: 'assets/cards/sh_001.webp' },
-    { id: 'SH_002', name: '이그리트', role: 'damage', cost: 50, maxHp: 150, attack: 65, attackInterval: 1.0, attackRange: 80,  targetType: 'single',       color: '#a66bff', attackFx: 'slash', cardImage: 'assets/cards/sh_002.webp' },
-    { id: 'SH_003', name: '탱크',     role: 'area',   cost: 40, maxHp: 220, attack: 35, attackInterval: 2.0, attackRange: 110, targetType: 'all_in_range', color: '#2ec4b6', attackFx: 'bearclaw', cardImage: 'assets/cards/sh_003.webp' },
-    { id: 'SH_005', name: '카이셀',   role: 'area',   cost: 55, maxHp: 180, attack: 28, attackInterval: 2.2, attackRange: 150, targetType: 'line', lineLength: 180, lineWidth: 36, lineMaxTilt: 0.9, color: '#5fd0ff', attackFx: 'breath', cardImage: 'assets/cards/sh_005.webp', unlockAfterChapter: 4 },
+    { id: 'SH_001', name: '아이언',   role: 'tank',   cost: 30, maxHp: 420, attack: 18, attackInterval: 1.5, attackRange: 80, targetType: 'single',       color: '#4f86ff', attackFx: 'slam', cardImage: 'assets/cards/sh_001.webp' },
+    { id: 'SH_002', name: '이그리트', role: 'damage', cost: 50, maxHp: 170, attack: 60, attackInterval: 0.9, attackRange: 90,  targetType: 'single',       color: '#a66bff', attackFx: 'slash', cardImage: 'assets/cards/sh_002.webp' },
+    { id: 'SH_003', name: '탱크',     role: 'area',   cost: 45, maxHp: 320, attack: 40, attackInterval: 2.0, attackRange: 95,  targetType: 'all_in_range', color: '#2ec4b6', attackFx: 'bearclaw', cardImage: 'assets/cards/sh_003.webp' },
+    { id: 'SH_005', name: '카이셀',   role: 'area',   cost: 50, maxHp: 180, attack: 30, attackInterval: 2.0, attackRange: 170, targetType: 'line', lineLength: 180, lineWidth: 36, lineMaxTilt: 0.9, color: '#5fd0ff', attackFx: 'breath', cardImage: 'assets/cards/sh_005.webp', unlockAfterChapter: 4 },
     { id: 'SH_004', name: '어금니',   role: 'magic',  cost: 45, maxHp: 120, attack: 38, attackInterval: 1.6, attackRange: 170, targetType: 'single',       color: '#ff8a3d', attackFx: 'orb', hitDelay: 0.38, cardImage: 'assets/cards/sh_004.webp', unlockAfterChapter: 3 },
-    { id: 'SH_006', name: '베르',     role: 'speed',  cost: 50, maxHp: 200, attack: 20, attackInterval: 0.45, attackRange: 38, targetType: 'single',       color: '#b8f04a', charge: { speed: 160, search: 160, leash: 150 }, attackFx: 'berclaw', cardImage: 'assets/cards/sh_006.webp', unlockAfterChapter: 5 },
+    { id: 'SH_006', name: '베르',     role: 'speed',  cost: 50, maxHp: 220, attack: 20, attackInterval: 0.45, attackRange: 38, targetType: 'single',       color: '#b8f04a', charge: { speed: 160, search: 160, leash: 150 }, attackFx: 'berclaw', cardImage: 'assets/cards/sh_006.webp', unlockAfterChapter: 5 },
   ],
 
   // 적. targetType: 없으면 한 명, all_in_range면 사거리 안 그림자 전부
