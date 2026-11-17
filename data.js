@@ -14,15 +14,15 @@
  * ================================================================== */
 const GAME_DATA = {
   config: {
-    startEnergy: 100,
+    startEnergy: 130,      // 1웨이브에 기본 그림자 3기쯤 세울 수 있게 (밸런스 확인 뒤 100 → 130)
     maxEnergy: 150,
     killReward: 10,
     waveStartBonus: 20,    // 2웨이브부터 [웨이브 시작]을 누를 때 지급
     recallRefundRate: 1.0, // 회수 시 환불 비율 (1.0 = 전액). 이번 준비 단계에서 배치한 기본 그림자만 회수 가능
     dismantleRefundRate: 0.5, // 해체 시 반환 비율. 생성 때 실제 소비한 에너지 기준, 반올림 (SD-DISMANTLE)
     coreHp: 200,           // 거점 최대 HP. 거점에 붙은 적이 공격 간격마다 공격력만큼 깎음
-    chapterCoreHeal: 50,   // (임시) 챕터를 클리어하고 바로 다음 챕터를 새로 시작하면 남은 거점 HP를 이어받고 이만큼 회복 (최대 coreHp). 이어하기·다른 챕터는 적용 안 함
-    maxArmy: 15,           // 전체 군단 최대 수 (기본 + 추출)
+    chapterCoreHeal: 100,  // (밸런스 확인 뒤 50 → 100) 챕터를 클리어하고 바로 다음 챕터를 새로 시작하면 남은 거점 HP를 이어받고 이만큼 회복 (최대 coreHp). 이어하기·다른 챕터는 적용 안 함
+    maxArmy: 15,           // 전체 군단 최대 수 (기본 + 추출). 12로 줄이면 더 일찍 가득 차서 15 유지, 대신 추출 비용을 올림
     maxBasic: 4,           // 기본 그림자 최대 수 (처음부터 쓰는 카드 기준). 챕터 보상으로 카드가 1장 늘 때마다 +1
     fixedStep: 1 / 60,     // 전투 계산 간격(초). 바꾸지 않는 것을 권장
     unlockAllChapters: true, // 테스트용: true면 클리어 여부와 상관없이 모든 챕터를 열어 둠 (출시 전 false로). 카드 해금은 그대로 클리어 기준
@@ -102,7 +102,8 @@ const GAME_DATA = {
   //              보스가 받는 피해 reduce만큼 감소(결계), 토템 반경 auraRadius 안의 적은 공격·이동 속도 haste배.
   //              그림자는 사거리·추격 범위 안에 토템이 있으면 토템부터 노림. 토템이 서 있는 동안은 재사용 대기 시간이 흐르지 않음
   //    lightning 낙뢰: 그림자 count기(분노 시 enragedCount기) 자리에 표식 → 표식 반경 radius 안 그림자에게 damage (표식은 그 자리에 고정)
-  //    dash      돌진: 거점 쪽(거점에 붙어 있으면 가장 가까운 그림자 쪽) 직선 length·폭 width 예고 → speed로 돌진하며 선 위 그림자에게 damage
+  //    dash      돌진: 사거리(length + 100) 안에서 그림자가 가장 많이 모인 쪽으로 직선 length·폭 width 예고 → speed로 돌진하며 선 위 그림자에게 damage
+  //              (거점 쪽으로 돌진하지 않음. 밸런스 확인 때 25초 만에 거점에 붙어서 바꿈)
   //    beam      눈 광선: 거점 쪽 부채꼴(반경 range, 각도 arc 라디안) 예고 → sweep초 동안 광선이 왼쪽에서 오른쪽으로 훑으며 닿은 그림자에게 damage
   //  devour: 보스가 그림자를 처치할 때마다 최대 HP의 이 비율만큼 회복 (개미왕 포식)
   //  spawn: 등장 출입구 (field.spawnPoints의 id: N·E·S·W). 북·남은 거점과 가까워서 동·서쪽을 씀
@@ -114,7 +115,7 @@ const GAME_DATA = {
       summons: [{ at: 0.7, enemies: ['EN_001', 'EN_001', 'EN_002'] }, { at: 0.4, enemies: ['EN_001', 'EN_001', 'EN_003'] }],
       slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 22, cooldown: 13, enragedCooldown: 9, enrageAt: 0.4 },
       skill: { type: 'poison', name: '독액 뱉기', first: 5, cooldown: 12, warn: 1.2, recover: 0.4, range: 320, radius: 55, flat: 0.38, duration: 4, dps: 10 } },
-    { id: 'BOSS_2', chapterId: 2, spawn: 'E', name: '바루카',   maxHp: 3400,  attack: 15, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#8fd8ff', reward: 50,
+    { id: 'BOSS_2', chapterId: 2, spawn: 'E', name: '바루카',   maxHp: 4000,  attack: 15, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#8fd8ff', reward: 50,
       summons: [{ at: 0.7, enemies: ['EN_001', 'EN_001', 'EN_002'] }, { at: 0.4, enemies: ['EN_001', 'EN_001', 'EN_003'] }],
       slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 25, cooldown: 13, enragedCooldown: 9, enrageAt: 0.4 },
       skill: { type: 'ambush', name: '은신 기습', first: 6, cooldown: 11, warn: 1.0, recover: 0.5, damage: 55 } },
@@ -129,9 +130,9 @@ const GAME_DATA = {
     { id: 'BOSS_5', chapterId: 5, spawn: 'W', name: '개미왕',   maxHp: 6400,  attack: 21, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#c8304a', reward: 50,
       summons: [{ at: 0.7, enemies: ['EN_001', 'EN_006', 'EN_002'] }, { at: 0.4, enemies: ['EN_006', 'EN_005', 'EN_003'] }],
       slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 36, cooldown: 13, enragedCooldown: 9, enrageAt: 0.4 },
-      skill: { type: 'dash', name: '돌진', first: 5, cooldown: 12, warn: 1.0, recover: 0.6, length: 160, width: 40, speed: 520, damage: 30 },
-      devour: 0.02 },
-    { id: 'BOSS_6', chapterId: 6, spawn: 'E', name: '신상',     maxHp: 8000, attack: 24, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#ff5a5a', reward: 50,
+      skill: { type: 'dash', name: '돌진', first: 5, cooldown: 12, warn: 1.0, recover: 0.6, length: 160, width: 40, speed: 520, damage: 22 },   // 밸런스 확인 뒤 돌진 피해 30 → 22, 포식 2% → 1%
+      devour: 0.01 },
+    { id: 'BOSS_6', chapterId: 6, spawn: 'E', name: '신상',     maxHp: 6800, attack: 24, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#ff5a5a', reward: 50,
       summons: [{ at: 0.7, enemies: ['EN_001', 'EN_002', 'EN_006'] }, { at: 0.4, enemies: ['EN_004', 'EN_005', 'EN_003'] }],
       slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 42, cooldown: 13, enragedCooldown: 9, enrageAt: 0.4 },
       skill: { type: 'beam', name: '눈 광선', first: 12, cooldown: 15, warn: 1.5, sweep: 1.0, recover: 0.4, range: 240, arc: 1.2, damage: 26 } },
@@ -145,13 +146,13 @@ const GAME_DATA = {
     maxRoamRadius: 220,     // 생성 위치(origin) 기준 최대 이동 반경
     returnThreshold: 20,    // 추격 대상이 없고 원점에서 이만큼 떨어지면 복귀
     spawnDelay: 0.5,        // 추출 직후 행동 시작까지(초)
-    units: [
-      { sourceEnemyId: 'EN_001', cost: 10, maxHp: 80,  attack: 23, moveSpeed: 55, attackRange: 35, attackInterval: 1.5 },
-      { sourceEnemyId: 'EN_002', cost: 15, maxHp: 56,  attack: 18, moveSpeed: 90, attackRange: 35, attackInterval: 1.2 },
-      { sourceEnemyId: 'EN_003', cost: 25, maxHp: 208, attack: 45, moveSpeed: 35, attackRange: 35, attackInterval: 2.0 },
-      { sourceEnemyId: 'EN_004', cost: 20, maxHp: 64,  attack: 20, moveSpeed: 50, attackRange: 110, attackInterval: 1.8 },
-      { sourceEnemyId: 'EN_005', cost: 25, maxHp: 160, attack: 22, moveSpeed: 40, attackRange: 50, attackInterval: 2.0, targetType: 'all_in_range' },
-      { sourceEnemyId: 'EN_006', cost: 15, maxHp: 44,  attack: 12, moveSpeed: 120, attackRange: 35, attackInterval: 0.8 },
+    units: [   // 비용은 밸런스 확인 뒤 모두 +5 (3웨이브면 군단이 가득 차고 에너지가 남아돌아서)
+      { sourceEnemyId: 'EN_001', cost: 15, maxHp: 80,  attack: 23, moveSpeed: 55, attackRange: 35, attackInterval: 1.5 },
+      { sourceEnemyId: 'EN_002', cost: 20, maxHp: 56,  attack: 18, moveSpeed: 90, attackRange: 35, attackInterval: 1.2 },
+      { sourceEnemyId: 'EN_003', cost: 30, maxHp: 208, attack: 45, moveSpeed: 35, attackRange: 35, attackInterval: 2.0 },
+      { sourceEnemyId: 'EN_004', cost: 25, maxHp: 64,  attack: 20, moveSpeed: 50, attackRange: 110, attackInterval: 1.8 },
+      { sourceEnemyId: 'EN_005', cost: 30, maxHp: 160, attack: 22, moveSpeed: 40, attackRange: 50, attackInterval: 2.0, targetType: 'all_in_range' },
+      { sourceEnemyId: 'EN_006', cost: 20, maxHp: 44,  attack: 12, moveSpeed: 120, attackRange: 35, attackInterval: 0.8 },
     ],
   },
 
@@ -169,9 +170,9 @@ const GAME_DATA = {
   chapters: [
     { chapterId: 1, name: '카르테논 신전', desc: '늑대와 얼음 기수가 몰려오는 첫 관문',
       theme: { map: 'assets/map.webp', decor: 'temple' }, waves: [
-      { waveId: 1, spawnInterval: 2.5, enemies: [
+      { waveId: 1, spawnInterval: 2.5, enemies: [   // 첫 웨이브는 거점에서 먼 동·서쪽에서만 (배치를 익힐 시간)
         { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_001', spawn: 3 },
-        { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_001', spawn: 2 },
+        { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 },
       ] },
       { waveId: 2, spawnInterval: 2.2, enemies: [
         { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },

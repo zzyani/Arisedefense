@@ -1362,13 +1362,18 @@ function startBossCast(state, B, d, e, type) {
     }
     if (!c.marks.length) return retry();
   } else if (type === 'dash') {
-    // 거점 쪽으로. 이미 거점 가까이 있으면 가장 가까운 그림자 쪽으로
-    let tx = core.x, ty = core.y, len = S.length;
-    if (dist(e.x, e.y, core.x, core.y) - coreRingRadius(e, core) < 50) {
-      const near = shadows.slice().sort((a, b) => dist(e.x, e.y, a.x, a.y) - dist(e.x, e.y, b.x, b.y))[0];
-      if (!near) return retry();
-      tx = near.x; ty = near.y; len = Math.min(len, dist(e.x, e.y, tx, ty) + 30);
+    // 사거리(length + 100) 안에서 그림자가 가장 많이 모인 쪽으로 (거점 쪽으로는 돌진하지 않음)
+    //  그림자마다 돌진선(폭 width + 여유)에 함께 걸리는 그림자 수를 세어 가장 많은 쪽 → 같으면 가까운 쪽. 그 그림자 30px 뒤까지
+    let best = null;
+    for (const s of shadows) {
+      const d0 = dist(e.x, e.y, s.x, s.y);
+      if (d0 > S.length + 100 || d0 < 1) continue;
+      const L0 = Math.min(S.length, d0 + 30), ex = e.x + (s.x - e.x) / d0 * L0, ey = e.y + (s.y - e.y) / d0 * L0;
+      const n = shadows.filter((o) => distToSegment(o.x, o.y, e.x, e.y, ex, ey) <= S.width / 2 + 6).length;
+      if (!best || n > best.n || (n === best.n && d0 < best.d)) best = { n, d: d0, s };
     }
+    if (!best) return retry();
+    const tx = best.s.x, ty = best.s.y, len = Math.min(S.length, best.d + 30);
     const D = dist(e.x, e.y, tx, ty) || 1, ux = (tx - e.x) / D, uy = (ty - e.y) / D;
     // 거점 둘레·전장 끝에 닿기 전에 멈춤
     const F = GAME_DATA.field, m = F.unitMargin, R = coreRingRadius(e, core);
