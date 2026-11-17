@@ -108,7 +108,7 @@ function createInitialState(chapterId = GAME_DATA.chapters[0].chapterId, availab
     events: [],               // 규칙 → UI 알림 (예: 선택한 잔영 만료). UI가 매 프레임 비움
     bossPrep: false,          // 보스전 준비 단계 (5웨이브 일반 적을 다 잡은 뒤, 보스 등장 전 배치)
     bossReady: false,         // 보스전 준비를 마치고 시작함 → 보스 등장
-    boss: null,               // 보스전 진행: { phase: 'waiting'|'active'|'dead', timer, uid, done(소환한 구간), slamTimer, skillTimer, cast(지금 쓰는 기술), enraged, zones(독 웅덩이), frenzy(광란 남은 초) }
+    boss: null,               // 보스전 진행: { phase: 'waiting'|'active'|'dead', timer, uid, done(소환한 구간), slamTimer, skillTimer, cast(지금 쓰는 기술), enraged, zones(독 웅덩이) }. 카르갈간 토템은 state.enemies 안 (totem: true)
     spawnIndex: 0,
     spawnTimer: 0,
     nextUid: 1,               // 전장 객체 고유 ID (종류 ID와 별개)
@@ -191,6 +191,7 @@ function calcDamage(attack, multiplier) {
 // 대상에게 피해. 이 공격으로 사망했을 때만 true (사망 처리 1회 보장)
 function applyDamage(target, amount) {
   if (!target.alive) return false;
+  if (target.damageTaken !== undefined) amount = Math.max(1, Math.round(amount * target.damageTaken));   // 카르갈간 결계: 받는 피해 감소
   target.hp = Math.max(0, target.hp - amount);
   if (target.hp === 0) {
     target.alive = false;
@@ -580,6 +581,7 @@ function createEnemy(state, enemyId, spawnIndex) {
     atCore: false,   // 거점에 붙어 거점을 공격하는 중 (처치될 때까지 계속)
     coreSlot: null,  // 거점 둘레에서 차지한 자리(각도, 라디안). 도착하면 정해지고 그 자리까지 둘레를 따라 걸어감
     moving: true,
+    revealed: false,   // 출입구에서 몸이 다 드러나면 true (updateEnemyReveal)
   };
 }
 
@@ -590,7 +592,8 @@ function findBasicTargets(state, unit) {
   const core = GAME_DATA.field.core;
   const inRange = state.enemies.filter((e) => targetable(e) && dist(e.x, e.y, unit.x, unit.y) <= unit.attackRange);
   if (inRange.length === 0) return [];
-  inRange.sort((a, b) => (dist(a.x, a.y, core.x, core.y) - dist(b.x, b.y, core.x, core.y)) || (a.uid - b.uid));
+  // 카르갈간 토템이 사거리 안에 있으면 토템부터 (결계를 깨야 보스에게 피해가 제대로 들어감)
+  inRange.sort((a, b) => (!!b.totem - !!a.totem) || (dist(a.x, a.y, core.x, core.y) - dist(b.x, b.y, core.x, core.y)) || (a.uid - b.uid));
   if (unit.targetType === 'all_in_range') return inRange;
   const main = inRange[0];
   if (unit.targetType === 'splash') {   // 첫 대상 + 그 주변 splashRadius 안의 적 (사거리 밖이어도 폭발에 휘말림)
@@ -622,6 +625,7 @@ function inLine(from, toward, e, len, width, maxTilt) {
 
 // 적: 사거리 내 가장 가까운 그림자(기본·추출) → 동률이면 먼저 생성된 그림자
 function findEnemyTarget(state, enemy) {
+  if (enemy.revealed === false) return null;   // 아직 출입구에서 나오는 중
   let best = null;
   let bestDist = Infinity;
   for (const s of getAllShadows(state)) {
@@ -651,7 +655,7 @@ function findChaseTarget(state, shadow) {
   let bestDist = Infinity;
   for (const e of state.enemies) {
     if (!canChase(shadow, e)) continue;
-    const d = dist(shadow.x, shadow.y, e.x, e.y);
+    const d = dist(shadow.x, shadow.y, e.x, e.y) - (e.totem ? 10000 : 0);   // 쫓을 수 있는 토템이 있으면 토템부터
     if (d < bestDist || (d === bestDist && e.uid < best.uid)) {
       best = e;
       bestDist = d;
@@ -839,6 +843,7 @@ function updateGame(state, dt) {
   if (state.status !== STATUS.PLAYING) return;   // 보스전 준비 단계로 넘어감
   updateRemnants(state, dt);              // 2. 잔영 시간 갱신
   updateEnemyMovement(state, dt);         // 3. 적 이동 / 거점 도달 (도달하면 멈춰서 거점 공격)
+  updateEnemyReveal(state);               //    출입구에서 몸이 다 드러났는지 (그 전엔 공격·추격 대상 아님)
   updateExtractedAI(state, dt);           // 4. 추출 그림자 탐색 / 추격 / 복귀
   updateChargingBasics(state, dt);        //    돌격하는 기본 그림자(베르): 달려가 붙기 / 복귀
   updateCooldowns(state, dt);             // 5. 쿨타임
@@ -851,12 +856,14 @@ function updateGame(state, dt) {
     return;
   }
   for (const enemy of killed) {           // 7. 처치 보상 + 잔영 생성 (사망 1회당 1번)
+    if (enemy.totem) { breakTotem(state, enemy, 'shadow'); continue; }   // 카르갈간 토템: 보상·잔영 없음 (처치 수에도 안 셈)
     state.stats.kills += 1;
     state.events.push('KILL');   // 효과음용
     state.stats.waveKills += 1;
     if (enemy.isBoss) {                   //    보스: 에너지만 많이, 잔영 없음(추출 불가)
       addEnergy(state, findEnemyData(enemy.typeId).reward || 0);
-      if (state.boss) Object.assign(state.boss, { phase: 'dead', cast: null, zones: [], frenzy: 0 });   // 남은 독 웅덩이·광란도 끝
+      if (state.boss) Object.assign(state.boss, { phase: 'dead', cast: null, zones: [] });   // 남은 독 웅덩이도 끝
+      for (const t of state.enemies) if (t.totem && t.alive) { t.alive = false; breakTotem(state, t, 'bossDead'); }   // 남은 토템도 무너짐
       state.events.push('BOSS_KILL');
     } else {
       addEnergy(state, GAME_DATA.config.killReward);
@@ -894,9 +901,10 @@ function updateRemnants(state, dt) {
 
 function updateEnemyMovement(state, dt) {
   const core = GAME_DATA.field.core;
-  const haste = enemyHaste(state);   // 광란의 주술: 적 이동 속도 증가
   for (const e of state.enemies) {
     if (!e.alive) continue;
+    const haste = enemyHaste(state, e);   // 토템 결계 안: 적 이동 속도 증가
+    if (e.totem) { e.moving = false; continue; }   // 카르갈간 토템: 세운 자리에 고정
     if (e.casting) { e.moving = e.dashing; continue; }   // 보스 기술 예고·후딜레이: 제자리 (돌진은 updateBoss가 움직임)
     // 사거리 안에 그림자가 있거나 거점에 붙었으면 멈춤 (원거리형은 쏘면서 거점 둘레까지 계속 이동)
     e.moving = !e.atCore && (e.moveWhileAttacking || !findEnemyTarget(state, e));
@@ -1044,8 +1052,7 @@ function clampToRoam(s) {
 
 function updateCooldowns(state, dt) {
   for (const u of getAllShadows(state)) if (u.alive) u.cooldown = Math.max(0, u.cooldown - dt);
-  const haste = enemyHaste(state);   // 광란의 주술: 적 공격 속도 증가
-  for (const e of state.enemies) if (e.alive) e.cooldown = Math.max(0, e.cooldown - dt * haste);
+  for (const e of state.enemies) if (e.alive) e.cooldown = Math.max(0, e.cooldown - dt * enemyHaste(state, e));   // 토템 결계 안: 적 공격 속도 증가
 }
 
 function processShadowAttacks(state) {
@@ -1161,13 +1168,49 @@ function distToSegment(px, py, ax, ay, bx, by) {
   return dist(px, py, ax + vx * t, ay + vy * t);
 }
 // 공격받을 수 있는 적인가 (은신한 보스는 그림자가 노리지 않음)
-function targetable(e) { return e.alive && !e.stealth; }
-// 광란의 주술 중이면 적의 공격·이동 속도 배율
-function enemyHaste(state) {
-  const B = state.boss;
-  if (!B || !(B.frenzy > 0)) return 1;
-  const d = findBossData(state.chapterId);
-  return (d && d.skill && d.skill.haste) || 1;
+function targetable(e) { return e.alive && !e.stealth && e.revealed !== false; }
+// 출현 연출: 출입구 가림선(revealTop) 위나 맵 위 끝 밖에 몸이 걸려 있는 동안은 revealed = false
+//  → 그림자가 공격·추격하지 않고, 적도 그림자를 공격하지 않고 계속 걸어 나옴. 한번 다 드러나면 그 뒤로는 검사하지 않음
+//  (그림을 못 불러온 환경에서는 원 반지름으로 판단)
+function updateEnemyReveal(state) {
+  for (const e of state.enemies) {
+    if (e.revealed !== false || !e.alive) continue;
+    const clip = spawnClipTop(e.spawn, state.chapterId);
+    const cfg = typeof SPRITES !== 'undefined' ? spriteFor(e.typeId, state.chapterId) : null;
+    const top = cfg ? spriteTopY(cfg, e.y, 1) : e.y - e.radius;
+    if (top >= Math.max(0, clip === null ? 0 : clip)) e.revealed = true;
+  }
+}
+// 카르갈간 토템: 살아 있는 토템 목록
+function aliveTotems(state) { return state.enemies.filter((t) => t.totem && t.alive); }
+// 토템 결계 안(어느 토템이든 auraRadius 안)에 있는 일반 적의 공격·이동 속도 배율 (보스·토템 자신은 제외)
+function enemyHaste(state, e) {
+  if (!state.boss || e.isBoss || e.totem) return 1;
+  const S = (findBossData(state.chapterId) || {}).skill;
+  if (!S || S.type !== 'totem') return 1;
+  return state.enemies.some((t) => t.totem && t.alive && inGroundEllipse(e.x, e.y, t.x, t.y, S.auraRadius)) ? S.haste : 1;
+}
+function createTotem(state, S, x, y) {
+  return {
+    uid: state.nextUid++, typeId: 'BOSS_TOTEM', totem: true, spawn: null, x, y, radius: 12,
+    hp: S.hp, maxHp: S.hp, attack: 0, moveSpeed: 0, attackInterval: 99, attackRange: 0, targetType: 'single',
+    coreStandoff: 0, moveWhileAttacking: false, cooldown: 0, alive: true, atCore: false, coreSlot: null,
+    moving: false, revealed: true, facing: 1, bornAt: state.elapsed, ttl: S.life,
+  };
+}
+// 토템이 부서짐. why: 'shadow'(그림자가 부숨) · 'expire'(시간이 다 됨) · 'bossDead'(보스가 쓰러짐)
+//  마지막 토템이 사라지면 결계가 깨지는 그림 (보스가 쓰러질 때는 빼고), 그림자가 부쉈으면 효과음·안내 (같은 틱에 여러 개가 부서져도 한 번만)
+function breakTotem(state, t, why) {
+  const fx = addEffect(state, t.x, t.y, t.x, t.y, 'enemy', 'totemBreak');
+  fx.color = (findBossData(state.chapterId) || {}).color;
+  state.events.push('TOTEM_BREAK');
+  if (why === 'bossDead' || aliveTotems(state).length || state.effects.some((f) => f.style === 'shieldBreak' && f.ttl === f.life)) return;
+  const boss = state.boss && state.enemies.find((x) => x.uid === state.boss.uid && x.alive);
+  if (boss) {
+    const sb = addEffect(state, boss.x, boss.y, boss.x, boss.y, 'enemy', 'shieldBreak');
+    sb.scale = typeof SPRITES !== 'undefined' ? shieldGeom(state, boss).scale : 1;
+  }
+  if (why === 'shadow') state.events.push('SHIELD_BREAK');
 }
 // 보스가 그림자에게 피해. 처치하면 사망 연출 + (개미왕) 포식 회복
 function bossHitShadow(state, boss, s, dmg) {
@@ -1205,7 +1248,7 @@ function updateBoss(state, dt) {
   if (!B) {
     if (state.spawnIndex < wave.enemies.length || state.enemies.length > 0) return;
     if (!state.bossReady) { enterBossPrep(state); return; }   // 먼저 보스전 준비 단계
-    B = state.boss = { phase: 'waiting', timer: GAME_DATA.bossDelay ?? 2, uid: null, done: [], slamTimer: 0, skillTimer: 0, cast: null, enraged: false, zones: [], frenzy: 0 };
+    B = state.boss = { phase: 'waiting', timer: GAME_DATA.bossDelay ?? 2, uid: null, done: [], slamTimer: 0, skillTimer: 0, cast: null, enraged: false, zones: [] };
   }
   if (B.phase === 'waiting') {
     B.timer -= dt;
@@ -1232,17 +1275,21 @@ function updateBoss(state, dt) {
       state.enemies.push(m);
     });
     state.events.push('BOSS_SUMMON');
-    if (d.skill && d.skill.afterSummon !== undefined) B.skillTimer = Math.min(B.skillTimer, d.skill.afterSummon);   // 카르갈간: 부하를 부르고 곧 광란의 주술
   });
   if (!B.enraged && e.hp <= e.maxHp * d.slam.enrageAt) { B.enraged = true; state.events.push('BOSS_ENRAGE'); }
-  // 3. 남아 있는 효과: 독 웅덩이 · 광란의 주술
+  // 3. 남아 있는 효과: 독 웅덩이 · 토템 결계 (토템이 하나라도 서 있으면 보스가 받는 피해 감소)
   updateBossZones(state, e, dt);
-  if (B.frenzy > 0) B.frenzy = Math.max(0, B.frenzy - dt);
+  for (const t of aliveTotems(state)) {   // 토템은 life초가 지나면 저절로 무너짐
+    t.ttl -= dt;
+    if (t.ttl <= 0) { t.alive = false; breakTotem(state, t, 'expire'); }
+  }
+  const totemsUp = d.skill && d.skill.type === 'totem' && aliveTotems(state).length > 0;
+  if (totemsUp) e.damageTaken = 1 - d.skill.reduce; else delete e.damageTaken;
   // 4. 기술: 광역 내려찍기와 고유 기술 중 하나씩만 (예고 → 발동 → 후딜레이)
   if (B.cast) stepBossCast(state, B, d, e, dt);
   else {
     B.slamTimer -= dt;
-    if (d.skill) B.skillTimer -= dt;
+    if (d.skill && !totemsUp) B.skillTimer -= dt;   // 토템이 서 있는 동안은 다음 토템까지 대기 시간이 흐르지 않음
     if (B.slamTimer <= 0) startBossCast(state, B, d, e, 'slam');
     else if (d.skill && B.skillTimer <= 0) startBossCast(state, B, d, e, d.skill.type);
   }
@@ -1293,6 +1340,18 @@ function startBossCast(state, B, d, e, type) {
     if (!target) return retry();
     c.targetUid = target.uid;
     state.events.push('BOSS_VANISH');
+  } else if (type === 'totem') {
+    // 보스 앞(거점 쪽) 부채꼴 arc 안에 spread 거리로 고르게 (그림자가 지키는 쪽이라 부술 수 있음. 전장 안, 거점 둘레와 겹치지 않게)
+    const n = B.enraged ? S.enragedCount : S.count, F = GAME_DATA.field, m = F.unitMargin + 12;
+    const ac = Math.atan2(core.y - e.y, core.x - e.x);
+    c.spots = [];
+    for (let k = 0; k < n; k++) {
+      const a = ac + (n > 1 ? k / (n - 1) - 0.5 : 0) * S.arc + (Math.random() - 0.5) * 0.2;
+      let x = e.x + Math.cos(a) * S.spread, y = e.y + Math.sin(a) * S.spread * 0.7;
+      const dc = dist(x, y, core.x, core.y), minC = core.radius + 45;
+      if (dc < minC) { x = core.x + (x - core.x) / (dc || 1) * minC; y = core.y + (y - core.y) / (dc || 1) * minC; }
+      c.spots.push({ x: Math.max(m, Math.min(F.width - m, x)), y: Math.max(m + 20, Math.min(F.height - m, y)) });
+    }
   } else if (type === 'lightning') {
     const n = B.enraged ? S.enragedCount : S.count;
     const pool = shadows.slice();
@@ -1420,10 +1479,14 @@ function releaseBossCast(state, B, d, e, c, S) {
     bossHitShadow(state, e, t, S.damage);
     const fx = addEffect(state, e.x, e.y, t.x, t.y, 'enemy', 'ambushSlash');
     fx.color = d.color;
-  } else if (c.type === 'frenzy') {
-    B.frenzy = S.duration;
-    const fx = addEffect(state, e.x, e.y, e.x, e.y, 'enemy', 'frenzyWave');
-    fx.radius = 170;
+  } else if (c.type === 'totem') {
+    for (const sp of c.spots) {
+      state.enemies.push(createTotem(state, S, sp.x, sp.y));
+      const r = addEffect(state, sp.x, sp.y, sp.x, sp.y, 'enemy', 'totemRise');
+      r.color = d.color;
+    }
+    const fx = addEffect(state, e.x, e.y, e.x, e.y, 'enemy', 'frenzyWave');   // 보스 발밑 마법진에서 기운이 솟음
+    fx.radius = S.spread * 1.3; fx.color = d.color;
   } else if (c.type === 'lightning') {
     for (const mk of c.marks) {
       for (const s of getAllShadows(state)) {
@@ -1442,7 +1505,7 @@ function releaseBossCast(state, B, d, e, c, S) {
 function processEnemyAttacks(state) {
   const core = GAME_DATA.field.core;
   for (const e of state.enemies) {
-    if (!e.alive || e.cooldown > 0 || e.casting) continue;   // 보스 광역 공격 중에는 기본 공격 안 함
+    if (!e.alive || e.totem || e.cooldown > 0 || e.casting) continue;   // 보스 광역 공격 중에는 기본 공격 안 함 (토템은 공격 없음)
     const target = findEnemyTarget(state, e);   // 매번 다시 찾음 → 이미 죽은 그림자 공격 방지
     if (!target) {
       // 거점에 붙은 적: 사거리에 그림자가 없으면 공격 간격마다 공격력만큼 거점 피해 (처치될 때까지 반복)
@@ -1481,6 +1544,7 @@ function processEnemyAttacks(state) {
 }
 
 function findEnemyTargetsInRange(state, enemy) {
+  if (enemy.revealed === false) return [];
   return getAllShadows(state).filter((s) => s.alive && dist(enemy.x, enemy.y, s.x, s.y) <= enemy.attackRange);
 }
 
@@ -1533,7 +1597,7 @@ function checkWaveComplete(state) {
 
 // 공격 연출 (게임 규칙에 영향 없음). style: 없으면 공격 선, 'claw'면 할퀴기 자국
 const LINE_FX_TIME = 0.12;
-const ATTACK_FX_TIME = { statueblast: 0.5, antkingclaw: 0.38, dashDust: 0.5, baranslash: 0.42, kargalsmash: 0.48, barukaslash: 0.36, kasakabite: 0.42, bossSlam: 0.5, poisonSplash: 0.6, iceShards: 0.55, ambushSlash: 0.42, frenzyWave: 0.7, lightning: 0.6, dashTrail: 0.35, devour: 0.9, claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36, bolt: 0.28, blast: 0.4, breath: 0.55, orb: 0.56, berclaw: 0.28, centclaw: 0.4, iceclaw: 0.42, icewave: 0.4, orcslash: 0.4, spear: 0.42, orcpunch: 0.46, axeslam: 0.42, rockspike: 0.44, hellbite: 0.42, clubslam: 0.44, curse: 0.6, reapwave: 0.5, antslash: 0.36, antclaw: 0.36, antblade: 0.44, acid: 0.42, queenstab: 0.34, crystalburst: 0.56, knightslash: 0.4, golemburst: 0.5, stonespell: 0.62, runebolt: 0.6, harpring: 0.62, stoneslash: 0.34 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
+const ATTACK_FX_TIME = { totemRise: 0.5, totemBreak: 0.6, shieldBreak: 0.6, statueblast: 0.5, antkingclaw: 0.38, dashDust: 0.5, baranslash: 0.42, kargalsmash: 0.48, barukaslash: 0.36, kasakabite: 0.42, bossSlam: 0.5, poisonSplash: 0.6, iceShards: 0.55, ambushSlash: 0.42, frenzyWave: 0.7, lightning: 0.6, dashTrail: 0.35, devour: 0.9, claw: 0.3, slash: 0.46, ice: 0.3, bearclaw: 0.36, slam: 0.4, bite: 0.36, bolt: 0.28, blast: 0.4, breath: 0.55, orb: 0.56, berclaw: 0.28, centclaw: 0.4, iceclaw: 0.42, icewave: 0.4, orcslash: 0.4, spear: 0.42, orcpunch: 0.46, axeslam: 0.42, rockspike: 0.44, hellbite: 0.42, clubslam: 0.44, curse: 0.6, reapwave: 0.5, antslash: 0.36, antclaw: 0.36, antblade: 0.44, acid: 0.42, queenstab: 0.34, crystalburst: 0.56, knightslash: 0.4, golemburst: 0.5, stonespell: 0.62, runebolt: 0.6, harpring: 0.62, stoneslash: 0.34 };   // 이펙트 종류별 재생 시간(초, 시작 지연 포함)
 const ORB_IMPACT_TIME = 0.18;   // 마력구가 닿은 뒤 터지며 흩어지는 시간(초)
 function addEffect(state, x1, y1, x2, y2, kind, style) {
   const ttl = ATTACK_FX_TIME[style] || LINE_FX_TIME;
@@ -1612,7 +1676,7 @@ function validateGameData(data) {
     }
     if (b.skill) {   // 고유 기술: 종류마다 필요한 값
       const K = b.skill, need = {
-        poison: ['range', 'radius', 'duration', 'dps'], ambush: ['damage'], frenzy: ['duration', 'haste'],
+        poison: ['range', 'radius', 'duration', 'dps'], ambush: ['damage'], totem: ['count', 'enragedCount', 'hp', 'spread', 'arc', 'life', 'reduce', 'auraRadius', 'haste'],
         lightning: ['count', 'enragedCount', 'radius', 'damage'], dash: ['length', 'width', 'speed', 'damage'], beam: ['sweep', 'range', 'arc', 'damage'],
       }[K.type];
       if (!need) errors.push(`bosses ${b.id}: skill.type ${K.type}은(는) 없는 기술입니다.`);
@@ -2501,28 +2565,29 @@ function bossCastInfo(state) {
   return { B, e, d: findEnemyData(e.typeId) };
 }
 
-// 보스 바닥 연출 (유닛 아래): 독 웅덩이 · 광란 오라 · 기술 예고(타원·표식·돌진선·부채꼴)
+// 보스 바닥 연출 (유닛 아래): 독 웅덩이 · 토템 결계 범위 · 기술 예고(타원·표식·돌진선·부채꼴)
 function drawBossFloor(ctx, state) {
   const info = bossCastInfo(state);
   if (!info) return;
   const { B, e, d } = info, T = state.elapsed, col = hexRgb(d.color);
   ctx.save();
   for (const z of B.zones) drawPoisonPool(ctx, z, T);
-  if (B.frenzy > 0) {   // 광란의 주술: 모든 적 발밑에 붉은 오라
-    const fade = Math.min(1, B.frenzy / 0.5);
-    const AU = BOSS_FX.frenzyAura, d0 = findBossData(state.chapterId), age = (d0.skill.duration || 6) - B.frenzy;
+  if (d.skill && d.skill.type === 'totem') {   // 토템 결계: 토템마다 결계 범위(옅은 청록 타원) + 범위 안 적 발밑에 붉은 고리(공격·이동 속도 상승)
+    const S = d.skill, totems = aliveTotems(state);
+    for (const t of totems) {
+      const gy = spriteGroundY(t.y), k = Math.min(1, (T - (t.bornAt || 0)) / 0.35), R = S.auraRadius * k;
+      ctx.fillStyle = rgba(col, 0.07);
+      ctx.beginPath(); ctx.ellipse(t.x, gy, R, R * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = rgba(col, 0.28 + 0.1 * Math.sin(T * 3 + t.uid)); ctx.lineWidth = 1; ctx.setLineDash([5, 5]); ctx.lineDashOffset = -T * 12;
+      ctx.beginPath(); ctx.ellipse(t.x, gy, R, R * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]); ctx.lineDashOffset = 0;
+    }
+    const AU = BOSS_FX.frenzyAura;
     for (const m of state.enemies) {
-      if (!m.alive) continue;
-      if (AU.img) {   // 그림: 나타남(0) → 반복(1~4, 적마다 박자 어긋나게) → 끝나기 0.25초 전 사라짐(5). 적 크기에 맞춰 늘림
-        const f = age < 0.12 ? 0 : B.frenzy < 0.25 ? 5 : 1 + Math.floor(T * AU.fps + m.uid) % 4;
-        drawBossFx(ctx, AU, f, m.x, spriteGroundY(m.y) - 1, 1, 0, Math.min(1.6, (m.radius + 8) / 22));
-        continue;
-      }
-      const r = (m.radius + 8) * (m.isBoss ? 1.2 : 1), pulse = 0.5 + 0.5 * Math.sin(T * 10 + m.uid);
-      const gy = spriteGroundY(m.y) - 1;
-      ctx.fillStyle = `rgba(255, 40, 30, ${(0.16 + 0.12 * pulse) * fade})`;
-      ctx.beginPath(); ctx.ellipse(m.x, gy, r, r * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = `rgba(255, 110, 70, ${(0.5 + 0.35 * pulse) * fade})`; ctx.lineWidth = 1.5;
+      if (!m.alive || enemyHaste(state, m) <= 1) continue;
+      if (AU.img) { drawBossFx(ctx, AU, 1 + Math.floor(T * AU.fps + m.uid) % 4, m.x, spriteGroundY(m.y) - 1, 1, 0, Math.min(1.6, (m.radius + 8) / 22)); continue; }
+      const r = m.radius + 8, pulse = 0.5 + 0.5 * Math.sin(T * 10 + m.uid), gy = spriteGroundY(m.y) - 1;
+      ctx.strokeStyle = `rgba(255, 110, 70, ${0.5 + 0.35 * pulse})`; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.ellipse(m.x, gy, r, r * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.stroke();
     }
   }
@@ -2533,12 +2598,18 @@ function drawBossFloor(ctx, state) {
     const blink = 0.55 + 0.45 * Math.abs(Math.sin(T * (6 + 14 * p)));
     if (c.phase === 'warn' && c.type === 'slam') drawGroundWarn(ctx, e.x, e.y, S.radius, col, p, blink);
     else if (c.phase === 'warn' && c.type === 'poison') drawGroundWarn(ctx, c.x, c.y, S.radius, POISON_RGB, p, blink, S.flat);
-    else if (c.phase === 'warn' && c.type === 'frenzy') {   // 주술 시전: 보스 발밑에 붉은 고리가 조여 듦
-      const gy = spriteGroundY(e.y);
-      for (const k of [1, 0.6]) {
-        const R = (70 - 34 * p) * k;
-        ctx.strokeStyle = `rgba(255, 60, 40, ${(0.5 + 0.5 * blink) * (k === 1 ? 1 : 0.7)})`; ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.ellipse(e.x, gy, R, R * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.stroke();
+    else if (c.phase === 'warn' && c.type === 'totem') {   // 토템 예고: 보스에서 토템 자리로 뻗는 기운 + 자리마다 작은 표식(조여 듦)
+      const gy0 = spriteGroundY(e.y);
+      for (const sp of c.spots) {
+        const gy = spriteGroundY(sp.y), q = Math.min(1, p * 1.6);
+        ctx.strokeStyle = rgba(col, 0.35 * blink); ctx.lineWidth = 1.5; ctx.setLineDash([3, 4]);
+        ctx.beginPath(); ctx.moveTo(e.x, gy0); ctx.lineTo(e.x + (sp.x - e.x) * q, gy0 + (gy - gy0) * q); ctx.stroke(); ctx.setLineDash([]);
+        drawGroundWarn(ctx, sp.x, sp.y, 26 - 8 * p, col, p, blink);
+        for (let i = 0; i < 4; i++) {   // 땅에서 솟는 주술 불씨
+          const ph = (T * 1.4 + i * 0.25 + sp.x * 0.01) % 1;
+          ctx.fillStyle = rgba(col, (1 - ph) * 0.8 * p);
+          ctx.fillRect(Math.round(sp.x + Math.sin(i * 2.1 + T) * 8), Math.round(gy - ph * 26), 2, 3);
+        }
       }
     }
     else if (c.phase === 'warn' && c.type === 'lightning') {
@@ -2605,6 +2676,119 @@ function drawBossSpawnMark(ctx, state, time) {
 }
 
 // 보스 위쪽 연출 (유닛 위): 은신 기습 표식 · 눈 광선
+// 카르갈간 토템 (임시 그림: 도트 느낌 도형). 나무 기둥 + 뿔 달린 해골 가면 + 청록 룬·눈빛.
+//  세워질 때 0.35초 동안 땅에서 솟음, 맞으면 하얗게 번쩍·흔들림
+function drawTotem(ctx, state, t) {
+  const T = state.elapsed, d = findBossData(state.chapterId) || {}, col = hexRgb(d.color || '#4fd0c8');
+  if (BOSS_FX.totemIdle.img) {   // 그림: 솟음(0.35초, 4장) → 서 있음(반복). 맞으면 밝게 번쩍·흔들림
+    const age = T - (t.bornAt || 0), hf = hitFx(t.hitAt, T), x = t.x + (hf ? hf.shakeX : 0), gy = spriteGroundY(t.y);
+    const S = age < 0.35 ? BOSS_FX.totemUp : BOSS_FX.totemIdle;
+    const f = age < 0.35 ? Math.floor(age / 0.35 * 4) : Math.floor(T * S.fps + t.uid) % 4;
+    ctx.save();
+    ctx.fillStyle = 'rgba(5, 3, 10, 0.4)';
+    ctx.beginPath(); ctx.ellipse(t.x, gy, 12, 4, 0, 0, Math.PI * 2); ctx.fill();
+    drawBossFx(ctx, S, f, x, gy);
+    if (hf && hf.flash > 0) { ctx.globalCompositeOperation = 'lighter'; drawBossFx(ctx, S, f, x, gy, 0.55 * hf.flash); }
+    ctx.restore();
+    if (age >= 0.35) drawHpBar(ctx, t.x, gy - 54, 24, t.hp / t.maxHp, rgba(col, 1));
+    return;
+  }
+  const k = Math.min(1, (T - (t.bornAt || 0)) / 0.35), H = Math.round(34 * (k < 1 ? 1 - Math.pow(1 - k, 3) : 1));
+  const hf = hitFx(t.hitAt, T), x = Math.round(t.x) + (hf ? hf.shakeX : 0), gy = Math.round(spriteGroundY(t.y));
+  ctx.save();
+  ctx.fillStyle = 'rgba(5, 3, 10, 0.45)';   // 발밑 그림자
+  ctx.beginPath(); ctx.ellipse(x, gy, 11, 4, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.rect(x - 20, gy - 60, 40, 60); ctx.clip();   // 땅 위만 (솟는 동안 땅속 부분은 안 보임)
+  const top = gy - H;
+  ctx.fillStyle = '#2a1c14'; ctx.fillRect(x - 4, top + 8, 8, H - 8);          // 기둥
+  ctx.fillStyle = '#4a3324'; ctx.fillRect(x - 3, top + 8, 3, H - 8);
+  ctx.fillStyle = '#1a110b'; ctx.fillRect(x + 3, top + 8, 1, H - 8);
+  ctx.fillStyle = '#5b4030'; ctx.fillRect(x - 6, top + 16, 12, 3); ctx.fillRect(x - 5, gy - 6, 10, 3);   // 묶은 끈
+  const glow = 0.6 + 0.4 * Math.sin(T * 5 + t.uid);
+  ctx.fillStyle = rgba(col, glow);                                              // 룬
+  ctx.fillRect(x - 1, top + 22, 2, 2); ctx.fillRect(x - 2, top + 26, 1, 3); ctx.fillRect(x + 1, top + 26, 1, 3);
+  ctx.fillStyle = '#d8cfb4'; ctx.fillRect(x - 6, top, 12, 9); ctx.fillRect(x - 4, top + 9, 8, 2);   // 해골 가면
+  ctx.fillStyle = '#a89e84'; ctx.fillRect(x - 6, top + 7, 12, 2);
+  ctx.fillStyle = '#e8e0c8'; ctx.fillRect(x - 9, top - 3, 3, 2); ctx.fillRect(x - 10, top - 6, 2, 3); ctx.fillRect(x + 6, top - 3, 3, 2); ctx.fillRect(x + 8, top - 6, 2, 3);   // 뿔
+  ctx.fillStyle = '#0b0710'; ctx.fillRect(x - 4, top + 3, 3, 3); ctx.fillRect(x + 1, top + 3, 3, 3); ctx.fillRect(x - 2, top + 9, 4, 1);
+  ctx.shadowColor = rgba(col, 1); ctx.shadowBlur = 6;
+  ctx.fillStyle = rgba(col, glow); ctx.fillRect(x - 3, top + 4, 2, 2); ctx.fillRect(x + 2, top + 4, 2, 2);   // 눈빛
+  ctx.shadowBlur = 0;
+  if (hf && hf.flash > 0) {   // 맞으면 하얗게
+    ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = `rgba(255,255,255,${0.5 * hf.flash})`;
+    ctx.fillRect(x - 10, top - 6, 20, H + 6);
+  }
+  ctx.restore();
+  if (k >= 1) drawHpBar(ctx, t.x, gy - H - 12, 24, t.hp / t.maxHp, rgba(col, 1));
+}
+
+// 결계 막 위치·크기: 보스 발밑(gy)과 그림 머리(top), 막 그림 배율(보스 키의 1.2배쯤 되게)
+function shieldGeom(state, e) {
+  const cfg = spriteFor(e.typeId, state.chapterId);
+  const gy = spriteGroundY(e.y), top = cfg ? spriteTopY(cfg, e.y, 1) : e.y - 40;
+  return { gy, top, scale: Math.max(0.7, (gy - top) * 1.2 / 62) };
+}
+// 토템 결계: 토템 머리에서 보스로 이어지는 주술 줄기 + 보스를 감싼 청록 막 (맞으면 막이 번쩍)
+function drawTotemBarrier(ctx, state) {
+  const info = bossCastInfo(state);
+  if (!info || !info.d.skill || info.d.skill.type !== 'totem') return;
+  const totems = aliveTotems(state);
+  if (!totems.length) return;
+  const { e, d } = info, T = state.elapsed, col = hexRgb(d.color);
+  const G = shieldGeom(state, e), gy = G.gy, top = G.top, art = !!BOSS_FX.shieldIdle.img;
+  // 막의 가운데·반지름: 그림이면 막 그림(가로 반경 40·높이 62, 바닥 기준)에 맞춤, 아니면 보스 키에 맞춘 타원
+  const cy = art ? gy - 28 * G.scale : (gy + top) / 2 + 2;
+  const ry = art ? 32 * G.scale : Math.max(24, (gy - top) * 0.62), rx = art ? 40 * G.scale : Math.max(26, ry * 0.85);
+  ctx.save();
+  ctx.lineCap = 'round';
+  const LK = BOSS_FX.totemLink;
+  for (const t of totems) {
+    const k = Math.min(1, (T - (t.bornAt || 0)) / 0.35);
+    if (k < 1) continue;
+    const x0 = t.x, y0 = spriteGroundY(t.y) - (BOSS_FX.totemIdle.img ? 36 : 31), dx = e.x - x0, dy = cy - y0, L = Math.hypot(dx, dy) || 1;
+    if (LK.img) {   // 그림: 붉은 사슬 줄기. 토템 해골에서 보스 쪽으로 돌려 그려 막 표면에서 멈춤, 길이만큼 앞부분을 잘라 씀(184px보다 길면 늘림)
+      const ca = dx / L, sa = dy / L, rim = 1 / Math.sqrt((ca / rx) ** 2 + (sa / ry) ** 2);
+      const len = Math.max(8, L - rim * 0.9), f = Math.floor(T * LK.fps + t.uid) % LK.frames, sw = Math.min(LK.w, len);
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.translate(x0, y0); ctx.rotate(Math.atan2(dy, dx));
+      ctx.drawImage(LK.img, 0, f * LK.h, sw, LK.h, 0, -LK.ay * 0.75, len, LK.h * 0.75);
+      ctx.restore();
+      continue;
+    }
+    const nx = -dy / L, ny = dx / L, n = Math.max(4, Math.round(L / 14)), seed = Math.floor(T * 14);
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+      const f = i / n, j = i === 0 || i === n ? 0 : (Math.sin(seed * 12.9 + i * 78.2 + t.uid) * 0.5) * 7;
+      pts.push([x0 + dx * f + nx * j, y0 + dy * f + ny * j]);
+    }
+    for (const [w, a] of [[4, 0.18], [1.5, 0.75]]) {
+      ctx.strokeStyle = rgba(col, a * (0.75 + 0.25 * Math.sin(T * 9 + t.uid))); ctx.lineWidth = w;
+      ctx.beginPath(); pts.forEach(([px, py], i) => (i ? ctx.lineTo(px, py) : ctx.moveTo(px, py))); ctx.stroke();
+    }
+  }
+  const hit = e.hitAt !== undefined && T - e.hitAt < 0.18 ? 1 - (T - e.hitAt) / 0.18 : 0;
+  if (BOSS_FX.shieldIdle.img) {   // 그림: 유지(반복) / 맞은 직후 0.2초 동안 맞음 2장
+    const G = shieldGeom(state, e), ht = T - (e.hitAt ?? -9);
+    const S = ht < 0.2 ? BOSS_FX.shieldHit : BOSS_FX.shieldIdle, f = ht < 0.2 ? (ht < 0.1 ? 0 : 1) : Math.floor(T * S.fps) % 4;
+    drawBossFx(ctx, S, f, e.x, G.gy + 2, 1, 0, G.scale);
+    ctx.restore();
+    return;
+  }
+  const g = ctx.createRadialGradient(e.x, cy, rx * 0.3, e.x, cy, rx);
+  g.addColorStop(0, rgba(col, 0.03)); g.addColorStop(0.75, rgba(col, 0.10 + 0.12 * hit)); g.addColorStop(1, rgba(col, 0.28 + 0.3 * hit));
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.ellipse(e.x, cy, rx, ry, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.shadowColor = rgba(col, 0.9); ctx.shadowBlur = 8;
+  ctx.strokeStyle = rgba(col, 0.55 + 0.2 * Math.sin(T * 4) + 0.3 * hit); ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.ellipse(e.x, cy, rx, ry, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = rgba([255, 255, 255], 0.35 + 0.4 * hit); ctx.lineWidth = 1;   // 위쪽에 흐르는 반사광
+  const a = T * 1.3 % (Math.PI * 2);
+  ctx.beginPath(); ctx.ellipse(e.x, cy, rx - 3, ry - 3, 0, a, a + 0.7); ctx.stroke();
+  ctx.restore();
+}
+
 function drawBossOverlay(ctx, state) {
   const info = bossCastInfo(state);
   if (!info || !info.B.cast) return;
@@ -2696,7 +2880,7 @@ function bossCastPose(state, cfg) {
     if (c.phase === 'warn') { const t = c.total - c.t; return { anim: 'cast', frame: t < 0.12 ? 0 : t < 0.24 ? 1 : 2 }; }
     return (c.recTotal || 0) - c.t < 0.1 ? { anim: 'cast', frame: 3 } : null;
   }
-  // 그 밖의 기술(광란의 주술 등): 예고 동안 마지막 앞 프레임까지 진행, 발동 뒤(후딜레이)에는 마지막 프레임
+  // 그 밖의 기술(주술 토템 등): 예고 동안 마지막 앞 프레임까지 진행, 발동 뒤(후딜레이)에는 마지막 프레임
   return { anim: 'cast', frame: c.phase === 'warn' ? Math.min(A.frames - 2, Math.floor(p * (A.frames - 1))) : A.frames - 1 };
 }
 
@@ -2730,13 +2914,13 @@ function drawBossBar(ctx, state) {
   for (const sm of d.summons) ctx.fillRect(Math.round(x + W * sm.at), y - 2, 1, H + 4);
   ctx.restore();
   drawLabel(ctx, `${d.name}${B.enraged ? ' · 분노' : ''}`, GAME_DATA.field.width / 2, y - 10, COLORS.text, '13px Galmuri11, sans-serif');
-  // 지금 쓰는 기술 이름 (바 아래). 광란의 주술은 남은 시간도
+  // 지금 쓰는 기술 이름 (바 아래). 토템 결계가 서 있으면 남은 토템 수
   const cast = B.cast && B.cast.phase !== 'recover' ? B.cast : null;
   const skillText = cast ? (cast.type === 'slam' ? '광역 내려찍기' : d.skill.name)
-    : B.frenzy > 0 ? `${d.skill.name} ${Math.ceil(B.frenzy)}초` : '';
+    : d.skill && d.skill.type === 'totem' && aliveTotems(state).length ? `결계 · 토템 ${aliveTotems(state).length}개 · ${Math.ceil(Math.max(...aliveTotems(state).map((t) => t.ttl)))}초 (피해 -${Math.round(d.skill.reduce * 100)}%)` : '';
   if (skillText) {
     const blink = 0.6 + 0.4 * Math.abs(Math.sin(state.elapsed * 8));
-    const tc = !cast ? [255, 110, 80] : cast.type === 'slam' ? c : [255, 200, 120];   // 광란 남은 시간: 붉게 / 내려찍기: 보스 색 / 고유 기술: 주황
+    const tc = !cast ? c : cast.type === 'slam' ? c : [255, 200, 120];   // 결계 유지 중·내려찍기: 보스 색 / 고유 기술: 주황
     drawLabel(ctx, `⚠ ${skillText}`, GAME_DATA.field.width / 2, y + H + 14, rgba(tc, blink), '12px Galmuri11, sans-serif');
   }
 }
@@ -2799,7 +2983,7 @@ SPRITES.BOSS_2 = {
 };
 
 // 3챕터 보스 카르갈간 (하이 오크 주술사, 붉은 망토·뼈 장식·푸른 수정 지팡이). 줄마다 몸 무게중심·발끝을 맞춰 132×82 칸 (원본 2.6배 축소)
-//  cast 줄: 광란의 주술 — 0~1 지팡이를 쥠, 2~3 손을 앞으로 뻗음(시전), 4 복귀
+//  cast 줄: 주술 토템 — 0~1 지팡이를 쥠, 2~3 손을 앞으로 뻗음(시전), 4 복귀
 SPRITES.BOSS_3 = {
   src: 'assets/sprites/boss_3.png',
   cellW: 132, cellH: 82,
@@ -3863,13 +4047,23 @@ const KASAKABITE_FX = {
 const BOSS_FX = {
   // 신상: eyeBeam = 눈 광선 222×108 6프레임 (원본 2배 축소, 출발점 = 눈 섬광 가운데 ax·ay, 오른쪽으로 뻗음)
   //       0 눈에 섬광(예고), 1 짧게 뻗음, 2~4 광선(훑는 동안 반복), 5 흩어짐. lens = 프레임마다 출발점에서 광선 끝까지 길이 → 실제 길이에 맞춰 가로로 늘림
+  // 카르갈간 주술 토템 (fx_totem.png, 40×54 3줄, 원본 6.4배 축소): 0줄 솟음 4 · 1줄 서 있음 4(주술 기운이 맴돎) · 2줄 부서짐 6. 기준점 = 흙더미 가운데(바닥)
+  totemUp:     { src: 'assets/sprites/fx_totem.png',       w: 40,  h: 54, frames: 4, ax: 20, ay: 50, row: 0 },
+  totemIdle:   { src: 'assets/sprites/fx_totem.png',       w: 40,  h: 54, frames: 4, ax: 20, ay: 50, row: 1, fps: 6 },
+  totemDown:   { src: 'assets/sprites/fx_totem.png',       w: 40,  h: 54, frames: 6, ax: 20, ay: 50, row: 2 },
+  //           결계 막 (fx_shield.png, 96×84 3줄, 원본 3.6배 축소 + 어두운 안쪽을 옅게): 0줄 유지 4 · 1줄 맞음 2 · 2줄 깨짐 6. 기준점 = 바닥 고리 가운데. 보스 키에 맞춰 늘려 그림
+  shieldIdle:  { src: 'assets/sprites/fx_shield.png',      w: 96,  h: 84, frames: 4, ax: 48, ay: 76, row: 0, fps: 6 },
+  shieldHit:   { src: 'assets/sprites/fx_shield.png',      w: 96,  h: 84, frames: 2, ax: 48, ay: 76, row: 1 },
+  shieldBreak: { src: 'assets/sprites/fx_shield.png',      w: 96,  h: 84, frames: 6, ax: 48, ay: 76, row: 2 },
+  //           연결 줄기 (fx_totemlink.png, 184×16, 프레임 4장을 세로로 쌓음, 원본 8배 축소): 토템 → 보스. 왼쪽 끝이 토템 쪽, 길이에 맞춰 앞부분만 잘라 씀
+  totemLink:   { src: 'assets/sprites/fx_totemlink.png',   w: 184, h: 16, frames: 4, ax: 0, ay: 8, vertical: true, fps: 8 },
   eyeBeam:     { src: 'assets/sprites/fx_eyebeam.png',     w: 222, h: 108, frames: 6, ax: 72, ay: 56, lens: [37, 70, 108, 146, 120, 129] },
   // 개미왕: dashDust = 돌진 흙먼지 96×66 6프레임 (원본 4.5배 축소, 바닥 가운데), 오른쪽으로 휘어 오름 → facing으로 뒤집음
   dashDust:    { src: 'assets/sprites/fx_dashdust.png',    w: 96,  h: 66,  frames: 6, ax: 52, ay: 60 },
   // 바란: lightning = 낙뢰 84×132 6프레임 (원본 5배 축소, 바닥 터짐 가운데 = 표식 자리). 아군 그림자 보라와 헷갈리지 않게 보랏빛을 파란 쪽으로 옮김
   lightning:   { src: 'assets/sprites/fx_lightning.png',   w: 84,  h: 132, frames: 6, ax: 42, ay: 120 },
-  // 카르갈간: frenzyWave = 광란의 주술 시전 (발밑 마법진에서 수정빛 기운이 솟음) 108×96 6프레임 (원본 4배 축소, 마법진 가운데)
-  //           frenzyAura = 광란 중 적 발밑 붉은 고리 64×64 6프레임 (원본 5배 축소, 고리 가운데): 0 나타남, 1~4 반복, 5 사라짐. 적 크기에 맞춰 늘려 그림
+  // 카르갈간: frenzyWave = 주술 토템 시전·토템이 솟는 자리 (발밑 마법진에서 수정빛 기운이 솟음) 108×96 6프레임 (원본 4배 축소, 마법진 가운데)
+  //           frenzyAura = 토템 결계 안 적 발밑 붉은 고리 64×64 6프레임 (원본 5배 축소, 고리 가운데): 0 나타남, 1~4 반복, 5 사라짐. 적 크기에 맞춰 늘려 그림
   frenzyWave:  { src: 'assets/sprites/fx_frenzywave.png',  w: 108, h: 96, frames: 6, ax: 54, ay: 80 },
   frenzyAura:  { src: 'assets/sprites/fx_frenzyaura.png',  w: 64,  h: 64, frames: 6, ax: 32, ay: 46, fps: 8 },
   // 바루카: xSlash = 기습 X자 베기 60×50 6프레임 (원본 6.4배 축소, 가운데 = 맞은 그림자 몸), iceShards = 사라진 자리 얼음 파편 64×54 7프레임 (원본 4.4배 축소, 바닥 고리 가운데)
@@ -3889,7 +4083,8 @@ function drawBossFx(ctx, S, frame, x, y, alpha = 1, rot = 0, scale = 1) {
   ctx.translate(rot ? x : Math.round(x * k) / k, rot ? y : Math.round(y * k) / k);
   if (rot) ctx.rotate(rot);
   if (scale !== 1) ctx.scale(scale, scale);
-  ctx.drawImage(S.img, frame * S.w, 0, S.w, S.h, -S.ax, -S.ay, S.w, S.h);
+  const sx = S.vertical ? 0 : frame * S.w, sy = S.vertical ? frame * S.h : (S.row || 0) * S.h;   // row: 여러 줄 시트의 줄 / vertical: 프레임을 세로로 쌓은 시트
+  ctx.drawImage(S.img, sx, sy, S.w, S.h, -S.ax, -S.ay, S.w, S.h);
   ctx.restore();
   return true;
 }
@@ -4053,18 +4248,50 @@ const PROC_FX = {
     });
     ctx.restore();
   },
-  // 카르갈간 광란의 주술: 붉은 충격파 두 겹이 퍼짐 + 솟는 핏빛 기운
+  // 카르갈간 토템이 솟음: 발밑 마법진에서 청록 기운이 솟는 그림(frenzyWave)을 작게 + 흙먼지
+  totemRise(ctx, fx) {
+    const p = Math.min(1, (fx.life - fx.ttl) / fx.life), gy = spriteGroundY(fx.y1), c = hexRgb(fx.color || '#4fd0c8');
+    if (drawBossFx(ctx, BOSS_FX.frenzyWave, Math.min(5, Math.floor(p * 6)), fx.x1, gy + 2, 1, 0, 0.55)) return;
+    ctx.save();
+    ctx.strokeStyle = rgba(c, 1 - p); ctx.lineWidth = 2;
+    const R = 10 + 22 * Math.sqrt(p);
+    ctx.beginPath(); ctx.ellipse(fx.x1, gy, R, R * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  },
+  // 토템이 부서짐: 나무 조각·뼛조각이 튀고 청록 빛이 흩어짐
+  totemBreak(ctx, fx) {
+    const p = Math.min(1, (fx.life - fx.ttl) / fx.life), gy = spriteGroundY(fx.y1), c = hexRgb(fx.color || '#4fd0c8');
+    if (drawBossFx(ctx, BOSS_FX.totemDown, Math.min(5, Math.floor(p * 6)), fx.x1, gy, p > 0.85 ? (1 - p) / 0.15 : 1)) return;   // 그림: 금이 가고 무너져 해골·흙더미만 남음
+    ctx.save();
+    ctx.fillStyle = rgba(c, 0.5 * (1 - p));
+    const R = 8 + 26 * Math.sqrt(p);
+    ctx.beginPath(); ctx.ellipse(fx.x1, gy - 16, R * 0.6, R, 0, 0, Math.PI * 2); ctx.fill();
+    for (let i = 0; i < 9; i++) {
+      const a = -Math.PI / 2 + (i - 4) * 0.33, v = 50 + (i * 37 % 30), t = p * 0.6;
+      const px = fx.x1 + Math.cos(a) * v * t, py = gy - 18 + Math.sin(a) * v * t + 160 * t * t;
+      ctx.fillStyle = i % 3 === 0 ? `rgba(216, 207, 180, ${1 - p})` : i % 3 === 1 ? `rgba(74, 51, 36, ${1 - p})` : rgba(c, 1 - p);
+      ctx.fillRect(Math.round(px), Math.round(py), i % 2 ? 3 : 2, 2);
+    }
+    ctx.restore();
+  },
+  // 결계가 깨짐: 금이 가고 조각나 청록 연기로 흩어짐 (보스 자리, 막과 같은 배율)
+  shieldBreak(ctx, fx) {
+    const p = Math.min(1, (fx.life - fx.ttl) / fx.life);
+    drawBossFx(ctx, BOSS_FX.shieldBreak, Math.min(5, Math.floor(p * 6)), fx.x1, spriteGroundY(fx.y1) + 2, p > 0.8 ? (1 - p) / 0.2 : 1, 0, fx.scale || 1);
+  },
+  // 카르갈간 토템 시전: 보스 발밑 마법진에서 청록 기운이 솟고, 토템 자리까지 고리 두 겹이 퍼짐
   frenzyWave(ctx, fx) {
     const p = Math.min(1, (fx.life - fx.ttl) / fx.life), gy = spriteGroundY(fx.y1);
     const art = drawBossFx(ctx, BOSS_FX.frenzyWave, Math.min(5, Math.floor(p * 6)), fx.x1, gy);   // 그림: 발밑 마법진에서 기운이 솟음 (그 위에 화면 전체로 퍼지는 붉은 고리)
     ctx.save();
-    ctx.shadowColor = 'rgba(255, 50, 30, 0.9)'; ctx.shadowBlur = 12;
+    const fc = hexRgb(fx.color || '#4fd0c8');
+    ctx.shadowColor = rgba(fc, 0.9); ctx.shadowBlur = 12;
     for (const [k, w] of [[1, 4], [0.65, 2]]) {
       const R = fx.radius * k * Math.sqrt(p);
-      ctx.strokeStyle = `rgba(255, 70, 50, ${1 - p})`; ctx.lineWidth = w * (1 - p) + 1;
+      ctx.strokeStyle = rgba(fc, 1 - p); ctx.lineWidth = w * (1 - p) + 1;
       ctx.beginPath(); ctx.ellipse(fx.x1, gy, R, R * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.stroke();
     }
-    ctx.fillStyle = `rgba(255, 90, 60, ${0.8 * (1 - p)})`;
+    ctx.fillStyle = rgba(fc, 0.8 * (1 - p));
     for (let i = 0; i < (art ? 0 : 10); i++) {
       const a = i / 10 * Math.PI * 2, r = 18 + 10 * (i % 3);
       ctx.fillRect(fx.x1 + Math.cos(a) * r - 1, gy + Math.sin(a) * r * GROUND_FLAT - 50 * p - (i % 4) * 6, 2, 6);
@@ -4663,7 +4890,7 @@ function render(ctx, state, view) {
     ctx.lineWidth = 1;
   }
 
-  drawBossFloor(ctx, state);   // 보스 바닥 연출: 기술 예고 · 독 웅덩이 · 광란 오라
+  drawBossFloor(ctx, state);   // 보스 바닥 연출: 기술 예고 · 독 웅덩이 · 토템 결계 범위
 
   // 기본 그림자
   for (const u of state.basicUnits) {
@@ -4769,6 +4996,7 @@ function render(ctx, state, view) {
 
   // 적
   for (const e of state.enemies) {
+    if (e.totem) { drawTotem(ctx, state, e); continue; }   // 카르갈간 토템 (임시 그림: 도형으로)
     const d = findEnemyData(e.typeId);
     const clipTop = spawnClipTop(e.spawn, state.chapterId);   // 출현 연출: 지정한 선 위쪽은 가려서 문·벽·굴 아래에서 나오는 것처럼
     const cfg = spriteFor(e.typeId, state.chapterId);
@@ -4832,6 +5060,7 @@ function render(ctx, state, view) {
   // 설원 숲: 휘날리는 눈 (유닛 위, 배치 미리보기 아래)
   if (theme.snow) drawSnowfall(ctx, view.time);
 
+  drawTotemBarrier(ctx, state);  // 카르갈간 토템 결계: 토템 → 보스 연결선 + 보스 결계 막 (유닛 위)
   drawBossOverlay(ctx, state);   // 은신 기습 표식 · 눈 광선 (유닛 위)
   drawBossSpawnMark(ctx, state, view.time);   // 보스전 준비 · 등장 직전: 보스가 나올 출입구 표시
   drawBossBar(ctx, state);   // 보스 이름 + HP 바 + 지금 쓰는 기술 (전장 위 가운데)
@@ -4850,9 +5079,7 @@ function render(ctx, state, view) {
     ctx.lineWidth = 2;
     ctx.stroke();
     ctx.lineWidth = 1;
-    ctx.setLineDash([4, 4]);
-    drawCircle(ctx, view.mouse.x, view.mouse.y, d.charge ? d.charge.leash : d.attackRange); ctx.stroke();   // 돌격하는 그림자는 달려갈 수 있는 범위
-    ctx.setLineDash([]);
+    // 사거리 점선 원은 그리지 않음 (범위는 D 키로 확인)
   }
 }
 
@@ -5353,7 +5580,7 @@ const EXTRACTED_SFX_OPTS = { pitch: 0.89, dark: true };   // 추출 그림자: �
 // 이름 뒤 조사 '이'/'가' (받침 있으면 '이')
 function josaIGa(word) { const c = word.charCodeAt(word.length - 1) - 0xac00; return c >= 0 && c < 11172 && c % 28 ? '이' : '가'; }
 // 보스 고유 기술이 발동하는 순간의 소리
-const BOSS_SKILL_SFX = { poison: 'poisonSplash', ambush: 'ambushStrike', frenzy: 'frenzyRoar', lightning: 'thunder', dash: 'dashRush', beam: 'beamFire' };
+const BOSS_SKILL_SFX = { poison: 'poisonSplash', ambush: 'ambushStrike', totem: 'totemRise', lightning: 'thunder', dash: 'dashRush', beam: 'beamFire' };
 function playEventSfx(st, ev) {
   const bossName = () => (findBossData(st.chapterId) || {}).name || '보스';
   if (ev === 'BOSS_PREP') {
@@ -5366,10 +5593,12 @@ function playEventSfx(st, ev) {
   else if (ev.startsWith('BOSS_WARN')) sfx('bossWarn', { dur: parseFloat(ev.split(':')[1]) || 1.5 });   // 기술마다 예고 시간이 다름
   else if (ev === 'BOSS_VANISH') sfx('ambushVanish');
   else if (ev === 'BOSS_DEVOUR') sfx('devour');
+  else if (ev === 'TOTEM_BREAK') sfx('totemBreak');
+  else if (ev === 'SHIELD_BREAK') { sfx('shieldBreak'); showToast(`${bossName()}의 결계가 깨졌다!`, 'ok'); }
   else if (ev.startsWith('BOSS_SKILL:')) {
     const type = ev.slice(11);
     sfx(BOSS_SKILL_SFX[type]);
-    if (type === 'frenzy') showToast(`${bossName()}의 광란의 주술! 적 공격·이동 속도 상승`, 'warn', true);
+    if (type === 'totem') showToast(`${bossName()}의 주술 토템! 토템을 부숴야 결계가 풀립니다`, 'warn', true);
   }
   else if (ev === 'BOSS_SLAM') sfx('bossSlam');
   else if (ev === 'BOSS_ATK') sfx('bossAttack');

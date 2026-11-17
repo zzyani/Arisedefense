@@ -97,7 +97,10 @@ const GAME_DATA = {
   //    poison    독액 뱉기: range 안에서 그림자가 가장 많이 모인 곳에 독 웅덩이(반경 radius)를 duration초. 안의 그림자는 0.5초마다 dps/2 피해
   //              flat: 웅덩이 타원의 세로/가로 비율 (웅덩이 그림에 맞춤, 예고 타원·판정도 같음)
   //    ambush    은신 기습: 반투명해져 공격받지 않음, HP가 가장 낮은 그림자에 표식 → 그 뒤로 순간이동해 damage (예고 중 대상이 사라지면 취소)
-  //    frenzy    광란의 주술: 화면의 모든 적·보스가 duration초 동안 공격·이동 속도 haste배. 부하 소환 afterSummon초 뒤에도 씀
+  //    totem     주술 토템 결계: 보스 앞(거점 쪽) 부채꼴 arc(라디안) 안 spread px에 토템 count개(분노 시 enragedCount개, HP hp)를 세움.
+  //              토템은 life초 뒤 저절로 무너짐. 토템이 하나라도 서 있으면
+  //              보스가 받는 피해 reduce만큼 감소(결계), 토템 반경 auraRadius 안의 적은 공격·이동 속도 haste배.
+  //              그림자는 사거리·추격 범위 안에 토템이 있으면 토템부터 노림. 토템이 서 있는 동안은 재사용 대기 시간이 흐르지 않음
   //    lightning 낙뢰: 그림자 count기(분노 시 enragedCount기) 자리에 표식 → 표식 반경 radius 안 그림자에게 damage (표식은 그 자리에 고정)
   //    dash      돌진: 거점 쪽(거점에 붙어 있으면 가장 가까운 그림자 쪽) 직선 length·폭 width 예고 → speed로 돌진하며 선 위 그림자에게 damage
   //    beam      눈 광선: 거점 쪽 부채꼴(반경 range, 각도 arc 라디안) 예고 → sweep초 동안 광선이 왼쪽에서 오른쪽으로 훑으며 닿은 그림자에게 damage
@@ -118,7 +121,7 @@ const GAME_DATA = {
     { id: 'BOSS_3', chapterId: 3, spawn: 'W', name: '카르갈간', maxHp: 4400,  attack: 17, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#4fd0c8', reward: 50,
       summons: [{ at: 0.7, enemies: ['EN_001', 'EN_001', 'EN_002'] }, { at: 0.4, enemies: ['EN_001', 'EN_004', 'EN_003'] }],
       slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 28, cooldown: 13, enragedCooldown: 9, enrageAt: 0.4 },
-      skill: { type: 'frenzy', name: '광란의 주술', first: 7, cooldown: 14, warn: 0.8, recover: 0.3, duration: 6, haste: 1.4, afterSummon: 1 } },
+      skill: { type: 'totem', name: '주술 토템', first: 6, cooldown: 10, warn: 1.0, recover: 0.4, count: 3, enragedCount: 4, hp: 220, spread: 115, arc: 2.2, life: 14, reduce: 0.7, auraRadius: 110, haste: 1.3 } },
     { id: 'BOSS_4', chapterId: 4, spawn: 'E', name: '바란',     maxHp: 5400,  attack: 19, moveSpeed: 12, attackInterval: 2.0, attackRange: 55, radius: 26, color: '#6ea8ff', reward: 50,
       summons: [{ at: 0.7, enemies: ['EN_001', 'EN_002', 'EN_004'] }, { at: 0.4, enemies: ['EN_001', 'EN_005', 'EN_003'] }],
       slam: { first: 8, warn: 1.5, recover: 0.5, radius: 100, damage: 32, cooldown: 13, enragedCooldown: 9, enrageAt: 0.4 },
