@@ -68,6 +68,8 @@ const REASON_TEXT = Object.freeze({
   EXTRACT_GONE:      '잔영이 사라졌습니다.',
   // 해체
   DISMANTLE_GONE:    '이미 사라진 그림자입니다.',
+  // 옮기기
+  MOVE_GONE:         '옮길 그림자가 없습니다.',
   UNIT_LOST:         '선택한 그림자가 쓰러졌습니다.',
 });
 
@@ -180,8 +182,14 @@ function getWaveData(state, waveNumber) {
 function dist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
 function isFieldActive(state) { return state.status === STATUS.PREPARATION || state.status === STATUS.PLAYING; }
 
-function addEnergy(state, amount) {
+// 에너지를 더하고 실제로 늘어난 양을 돌려줌 (최대치에서 넘친 만큼은 버려짐)
+//  kind가 있으면 화면 연출용 기록: ENERGY:종류:받을 양:실제로 늘어난 양:x:y (kill은 처치 자리에서 흡수 구슬이 날아감)
+function addEnergy(state, amount, kind, x = 0, y = 0) {
+  const before = state.energy;
   state.energy = Math.min(state.maxEnergy, state.energy + amount);
+  const gained = state.energy - before;
+  if (kind) state.events.push(`ENERGY:${kind}:${amount}:${gained}:${Math.round(x)}:${Math.round(y)}`);
+  return gained;
 }
 
 function calcDamage(attack, multiplier) {
@@ -292,13 +300,14 @@ function moveAroundCore(unit, tx, ty, maxStep, stopDist) {
 /* ---------- 기본 그림자: 자유 배치 / 회수 ---------- */
 
 // 기본 그림자 배치 위치 검사. 문제가 없으면 null
-function checkPlacement(state, x, y) {
+// ignoreUid: 옮기는 그림자 자신은 간격 검사에서 뺌
+function checkPlacement(state, x, y, ignoreUid = null) {
   const F = GAME_DATA.field;
   const P = F.placement;
   if (x < P.edgeClear || x > F.width - P.edgeClear || y < P.edgeClear || y > F.height - P.edgeClear) return 'PLACE_EDGE';
   if (dist(x, y, F.core.x, F.core.y) <= P.coreClear) return 'PLACE_CORE';
   if (F.spawnPoints.some((sp, i) => { const p = spawnPointFor(state.chapterId, i); return dist(x, y, p.x, p.y) <= P.spawnClear; })) return 'PLACE_SPAWN';
-  if (state.basicUnits.some((u) => u.alive && dist(x, y, u.x, u.y) <= P.basicSpacing)) return 'PLACE_OVERLAP';
+  if (state.basicUnits.some((u) => u.alive && u.uid !== ignoreUid && dist(x, y, u.x, u.y) <= P.basicSpacing)) return 'PLACE_OVERLAP';
   return null;
 }
 
@@ -389,9 +398,36 @@ function recallShadow(state, unit) {
   unit.alive = false;
   state.basicUnits = state.basicUnits.filter((u) => u.uid !== unit.uid);
   if (state.selectedUnitUid === unit.uid) state.selectedUnitUid = null;
-  addEnergy(state, refund);
+  addEnergy(state, refund, 'refund');
   state.stats.energySpent -= refund;
   return { ok: true, unit, refund };
+}
+
+/* ---------- 기본 그림자 옮기기 ----------
+ *  배치한 기본 그림자를 끌어다 다른 자리로. 준비 단계는 무료, 전투 중에는 에너지 config.moveCost
+ *  새 자리도 배치 규칙(checkPlacement)을 그대로 따름 (자기 자신과의 간격은 뺌). 베르는 지키는 자리(origin)도 함께 옮김 */
+function moveCostFor(state) { return state.status === STATUS.PLAYING ? (GAME_DATA.config.moveCost || 0) : 0; }
+function canMoveShadow(state, uid, x, y) {
+  if (!isFieldActive(state)) return { ok: false, reason: 'INVALID_STATUS' };
+  const unit = state.basicUnits.find((u) => u.uid === uid && u.alive);
+  if (!unit) return { ok: false, reason: 'MOVE_GONE' };
+  const placeError = checkPlacement(state, x, y, uid);
+  if (placeError) return { ok: false, reason: placeError, unit };
+  const cost = moveCostFor(state);
+  if (state.energy < cost) return { ok: false, reason: 'NOT_ENOUGH_ENERGY', unit, cost };
+  return { ok: true, unit, cost };
+}
+function moveShadow(state, uid, x, y) {
+  const check = canMoveShadow(state, uid, x, y);
+  if (!check.ok) return check;
+  const { unit, cost } = check;
+  state.energy -= cost;
+  state.stats.energySpent += cost;
+  unit.x = x; unit.y = y;
+  unit.facing = x < GAME_DATA.field.core.x ? -1 : 1;   // 거점 바깥쪽을 봄
+  if (unit.mobile) { unit.originX = x; unit.originY = y; unit.targetId = null; unit.moving = false; }
+  state.events.push('SHADOW_MOVED');
+  return { ok: true, unit, cost };
 }
 
 /* ---------- 그림자 해체 (SD-DISMANTLE) ---------- */
@@ -442,7 +478,7 @@ function dismantleShadow(state, unitUid) {
   if (state.selectedUnitUid === unit.uid) state.selectedUnitUid = null;
   // 이 그림자를 노리던 적은 다음 틱에 대상을 다시 찾음 (findEnemyTarget이 매 틱 재탐색)
   const before = state.energy;
-  addEnergy(state, refund);
+  addEnergy(state, refund, 'refund');
   const gained = state.energy - before;   // 상한에 걸리면 실제 반환량은 더 작음
   state.stats.dismantles += 1;
   state.stats.energyRefunded += gained;
@@ -675,7 +711,7 @@ function startWave(state) {
     for (const u of state.basicUnits) u.recallable = false;
     return setStatus(state, STATUS.PLAYING);
   }
-  if (state.wave >= 2) addEnergy(state, GAME_DATA.config.waveStartBonus);
+  if (state.wave >= 2) addEnergy(state, GAME_DATA.config.waveStartBonus, 'wave');
   for (const u of state.basicUnits) u.recallable = false;   // 전투에 들어간 그림자는 회수 잠금
   state.spawnIndex = 0;
   state.spawnTimer = 0;   // 첫 적은 즉시 생성
@@ -861,12 +897,12 @@ function updateGame(state, dt) {
     state.events.push('KILL');   // 효과음용
     state.stats.waveKills += 1;
     if (enemy.isBoss) {                   //    보스: 에너지만 많이, 잔영 없음(추출 불가)
-      addEnergy(state, findEnemyData(enemy.typeId).reward || 0);
+      addEnergy(state, findEnemyData(enemy.typeId).reward || 0, 'boss', enemy.x, enemy.y);
       if (state.boss) Object.assign(state.boss, { phase: 'dead', cast: null, zones: [] });   // 남은 독 웅덩이도 끝
       for (const t of state.enemies) if (t.totem && t.alive) { t.alive = false; breakTotem(state, t, 'bossDead'); }   // 남은 토템도 무너짐
       state.events.push('BOSS_KILL');
     } else {
-      addEnergy(state, GAME_DATA.config.killReward);
+      addEnergy(state, GAME_DATA.config.killReward, 'kill', enemy.x, enemy.y);
       if (Math.random() < GAME_DATA.extraction.remnantChance) createRemnant(state, enemy);
     }
     addCorpse(state, enemy);
@@ -1632,6 +1668,7 @@ function validateGameData(data) {
   if (!Number.isInteger(c.maxArmy) || c.maxArmy < 1) errors.push('config: maxArmy는 1 이상의 정수여야 합니다.');
   if (!Number.isInteger(c.maxBasic) || c.maxBasic < 1 || c.maxBasic > c.maxArmy) errors.push('config: maxBasic은 1 이상, maxArmy 이하의 정수여야 합니다.');
   if (typeof c.recallRefundRate !== 'number' || c.recallRefundRate < 0 || c.recallRefundRate > 1) errors.push('config: recallRefundRate는 0~1 사이 숫자여야 합니다.');
+  if (typeof c.moveCost !== 'number' || c.moveCost < 0) errors.push('config: moveCost는 0 이상 숫자여야 합니다.');
   if (typeof c.dismantleRefundRate !== 'number' || c.dismantleRefundRate < 0 || c.dismantleRefundRate > 1) errors.push('config: dismantleRefundRate는 0~1 사이 숫자여야 합니다.');
 
   if (!isPos(F.width) || !isPos(F.height)) errors.push('field: width / height가 올바르지 않습니다.');
@@ -2655,18 +2692,18 @@ function drawBossFloor(ctx, state) {
 
 // 보스 출현 예고: 보스전 준비 단계와 등장 직전(bossDelay)에 그 출입구에서 보스 색 빛이 맥동하고 거점 쪽으로 화살표가 흐름
 //  time은 실제 시간 (준비 단계에는 게임 시간이 멈춰 있음)
-function drawBossSpawnMark(ctx, state, time) {
-  const waiting = state.boss && state.boss.phase === 'waiting';
-  if (!(state.status === STATUS.PREPARATION && state.bossPrep) && !(waiting && state.status === STATUS.PLAYING)) return;
-  const d = findBossData(state.chapterId);
-  if (!d) return;
-  const sp = spawnPointFor(state.chapterId, bossSpawnIndex(d)), core = GAME_DATA.field.core, F = GAME_DATA.field;
-  const c = hexRgb(d.color), pulse = 0.5 + 0.5 * Math.sin(time * 4);
+// 출입구 표시: 출입구 빛 + 거점 쪽으로 흐르는 화살표 3개 (보스전 준비·일반 웨이브 출현 방향 공용)
+//  alpha: 전체 진하기(0~1), size: 빛 크기 배율, glow: 출입구 빛만 따로 줄이는 배율 (화살표는 그대로)
+function drawEntranceMark(ctx, sp, c, time, alpha = 1, size = 1, glow = 1) {
+  if (alpha <= 0) return;
+  const core = GAME_DATA.field.core, pulse = 0.5 + 0.5 * Math.sin(time * 4);
   const D = dist(sp.x, sp.y, core.x, core.y) || 1, ux = (core.x - sp.x) / D, uy = (core.y - sp.y) / D;
   ctx.save();
-  const g = ctx.createRadialGradient(sp.x, sp.y, 0, sp.x, sp.y, 70 + 10 * pulse);   // 출입구 빛
-  g.addColorStop(0, rgba(c, 0.55 + 0.25 * pulse)); g.addColorStop(1, rgba(c, 0));
-  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(sp.x, sp.y, 80, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha *= alpha;
+  const R = (70 + 10 * pulse) * size;
+  const g = ctx.createRadialGradient(sp.x, sp.y, 0, sp.x, sp.y, R);   // 출입구 빛
+  g.addColorStop(0, rgba(c, (0.55 + 0.25 * pulse) * glow)); g.addColorStop(1, rgba(c, 0));
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(sp.x, sp.y, R + 10, 0, Math.PI * 2); ctx.fill();
   ctx.translate(sp.x, sp.y); ctx.rotate(Math.atan2(uy, ux));   // 거점 쪽으로 흐르는 화살표 3개
   ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   ctx.shadowColor = rgba(c, 0.9); ctx.shadowBlur = 8;
@@ -2676,6 +2713,44 @@ function drawBossSpawnMark(ctx, state, time) {
     ctx.beginPath(); ctx.moveTo(x - 9, -12); ctx.lineTo(x + 3, 0); ctx.lineTo(x - 9, 12); ctx.stroke();
   }
   ctx.restore();
+}
+
+// 일반 웨이브 출현 방향 (글자 없이 빛·화살표만)
+//  준비 단계: 다음 웨이브에 적이 나오는 출입구를 모두. 많이 나오는 쪽일수록 빛이 크고 진함
+//  전투 중: 적이 나오기 SPAWN_HINT_TIME초 전부터 그 출입구가 차오르듯 밝아짐 (나오는 순간 가장 밝고, 이어서 나올 적이 없으면 사라짐)
+const SPAWN_HINT_COLOR = [255, 96, 72];
+const SPAWN_HINT_TIME = 1.5;
+function drawSpawnHints(ctx, state, time) {
+  const wave = getWaveData(state, state.wave);
+  if (!wave || state.bossPrep || state.bossReady) return;   // 보스전은 drawBossSpawnMark
+  const n = GAME_DATA.field.spawnPoints.length, strength = new Array(n).fill(0);
+  if (state.status === STATUS.PREPARATION) {
+    const count = new Array(n).fill(0);
+    for (const en of wave.enemies) count[en.spawn] += 1;
+    const most = Math.max(...count);
+    count.forEach((k, i) => { if (k) strength[i] = 0.45 + 0.55 * k / most; });
+  } else if (state.status === STATUS.PLAYING) {
+    for (let k = 0; state.spawnIndex + k < wave.enemies.length; k++) {
+      const t = state.spawnTimer + k * wave.spawnInterval;   // 이 적이 나오기까지 남은 시간
+      if (t > SPAWN_HINT_TIME) break;
+      const i = wave.enemies[state.spawnIndex + k].spawn;
+      strength[i] = Math.max(strength[i], 1 - Math.max(0, t) / SPAWN_HINT_TIME);
+    }
+  } else return;
+  strength.forEach((v, i) => {
+    if (v > 0) drawEntranceMark(ctx, spawnPointFor(state.chapterId, i), SPAWN_HINT_COLOR, time, 0.3 + 0.4 * v, 0.6 + 0.25 * v, 0.35);   // 은은하게: 빛은 약하게, 화살표는 보이게
+  });
+}
+
+function drawBossSpawnMark(ctx, state, time) {
+  const waiting = state.boss && state.boss.phase === 'waiting';
+  if (!(state.status === STATUS.PREPARATION && state.bossPrep) && !(waiting && state.status === STATUS.PLAYING)) return;
+  const d = findBossData(state.chapterId);
+  if (!d) return;
+  const sp = spawnPointFor(state.chapterId, bossSpawnIndex(d)), core = GAME_DATA.field.core, F = GAME_DATA.field;
+  const c = hexRgb(d.color), pulse = 0.5 + 0.5 * Math.sin(time * 4);
+  const D = dist(sp.x, sp.y, core.x, core.y) || 1, ux = (core.x - sp.x) / D, uy = (core.y - sp.y) / D;
+  drawEntranceMark(ctx, sp, c, time, 1, 1);
   const lx = Math.max(70, Math.min(F.width - 70, sp.x + ux * 70)), ly = Math.max(40, sp.y + uy * 70 - 34);
   drawLabel(ctx, `⚠ 보스 ${d.name} 출현`, lx, ly, rgba([255, 230, 200], 0.75 + 0.25 * pulse), 'bold 13px Galmuri11, sans-serif');
 }
@@ -5067,8 +5142,10 @@ function render(ctx, state, view) {
 
   drawTotemBarrier(ctx, state);  // 카르갈간 토템 결계: 토템 → 보스 연결선 + 보스 결계 막 (유닛 위)
   drawBossOverlay(ctx, state);   // 은신 기습 표식 · 눈 광선 (유닛 위)
+  drawSpawnHints(ctx, state, view.time);      // 일반 웨이브: 준비 단계엔 다음 웨이브 출입구, 전투 중엔 적이 나오기 직전 출입구
   drawBossSpawnMark(ctx, state, view.time);   // 보스전 준비 · 등장 직전: 보스가 나올 출입구 표시
   drawBossBar(ctx, state);   // 보스 이름 + HP 바 + 지금 쓰는 기술 (전장 위 가운데)
+  drawEnergyOrbs(ctx, view); // 처치 자리 → HUD 에너지로 날아가는 흡수 구슬
 
   // 배치 미리보기 (카드 선택 중 마우스 위치)
   if (placing && view.mouse && view.hoverRemnantUid === null) {
@@ -5086,6 +5163,33 @@ function render(ctx, state, view) {
     ctx.lineWidth = 1;
     // 사거리 점선 원은 그리지 않음 (범위는 D 키로 확인)
   }
+  drawMovePreview(ctx, state, view);
+}
+
+// 끌어서 옮기는 중: 원래 자리 → 놓을 자리 점선, 놓을 자리에 반투명 그림자 + 발밑 고리(초록 가능 / 빨강 불가), 전투 중이면 드는 에너지
+function drawMovePreview(ctx, state, view) {
+  const g = view.drag;
+  if (!g || !g.active) return;
+  const u = state.basicUnits.find((x) => x.uid === g.uid && x.alive);
+  if (!u) return;
+  const chk = canMoveShadow(state, u.uid, g.x, g.y), color = chk.ok ? COLORS.ghostOk : COLORS.ghostBad;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(200, 180, 255, 0.6)'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(u.x, u.y); ctx.lineTo(g.x, g.y); ctx.stroke(); ctx.setLineDash([]);
+  const gy = spriteGroundY(g.y);
+  ctx.strokeStyle = color; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.ellipse(g.x, gy, 16, 16 * GROUND_FLAT, 0, 0, Math.PI * 2); ctx.stroke();
+  const cfg = spriteFor(u.typeId);
+  if (cfg) {
+    const facing = g.x < GAME_DATA.field.core.x ? -1 : 1;
+    drawSpriteFrame(ctx, cfg, false, 'idle', 0, g.x, g.y, facing, 0.55, 1, 0, null);
+  } else {
+    ctx.globalAlpha = 0.5; ctx.fillStyle = findShadowData(u.typeId).color;
+    drawRoundRect(ctx, g.x - 15, g.y - 15, 30, 30, 7); ctx.fill(); ctx.globalAlpha = 1;
+  }
+  const cost = moveCostFor(state);
+  if (cost > 0) drawLabel(ctx, `에너지 ${cost}`, g.x, gy + 16, state.energy >= cost ? 'rgba(220, 200, 255, 0.95)' : '#ff7a8a', '11px Galmuri11, sans-serif');
+  ctx.restore();
 }
 
 
@@ -5106,6 +5210,9 @@ const game = {
   view: {
     mouse: null, hoverRemnantUid: null, hoverUnitUid: null, showRanges: false, time: 0, confirmDismantleUid: null,
     crackFlash: [0, 0, 0, 0],       // 출현 지점별 번쩍임 세기 (적이 나올 때 1 → 서서히 0)
+    energyOrbs: [],                 // 처치 자리에서 HUD 에너지로 날아가는 흡수 구슬 { x, y, t0, gained, full, seed, arrived }
+    energyTarget: { x: 480, y: -20 },   // 구슬이 날아갈 곳 = HUD 에너지 숫자 바로 아래 (전장 좌표, 매 프레임 갱신)
+    onEnergyArrive: null,           // 구슬이 HUD에 닿을 때 (UI가 숫자 반응을 띄움)
   },
   toastTimer: null,
   lastTime: null,
@@ -5285,7 +5392,43 @@ function fitCanvasToScreen() {
   }
 }
 
+/* ---------- 끌어다 옮기기 ----------
+ *  기본 그림자 위에서 눌러 6px 넘게 움직이면 끌기 시작 → 놓은 자리로 옮김 (moveShadow: 준비 단계 무료, 전투 중 에너지 moveCost)
+ *  그냥 클릭하면 지금처럼 상세 패널. 잔영이 겹쳐 있으면 추출이 먼저 */
+const DRAG_START_PX = 6;
+function onMouseDown(evt) {
+  if (evt.button !== 0 || evt.ctrlKey) return;
+  const st = game.state;
+  if (!isFieldActive(st)) return;
+  const p = toFieldPos(evt);
+  if (getRemnantAt(st, p.x, p.y)) return;
+  const unit = getBasicAt(st, p.x, p.y);
+  if (!unit) return;
+  game.view.drag = { uid: unit.uid, sx: p.x, sy: p.y, ox: unit.x - p.x, oy: unit.y - p.y, x: unit.x, y: unit.y, active: false };
+}
+function onDragMove(evt) {
+  const g = game.view.drag;
+  if (!g) return false;
+  const p = toFieldPos(evt);
+  if (!g.active && dist(p.x, p.y, g.sx, g.sy) > DRAG_START_PX) g.active = true;
+  g.x = p.x + g.ox; g.y = p.y + g.oy;   // 잡은 지점 그대로 (그림자 발이 손가락 아래로 튀지 않게)
+  if (g.active) game.canvas.style.cursor = 'grabbing';
+  return g.active;
+}
+function onMouseUp(evt) {
+  const g = game.view.drag;
+  if (!g) return;
+  game.view.drag = null;
+  if (!g.active) return;   // 거의 안 움직임 → 클릭(상세 패널)으로 처리
+  game.view.suppressClickUntil = performance.now() + 120;   // 놓은 직후의 click이 패널을 열지 않게
+  const st = game.state;
+  const result = moveShadow(st, g.uid, g.x, g.y);
+  if (result.ok) { if (result.cost > 0) showToast(`${findShadowData(result.unit.typeId).name} 이동 (에너지 -${result.cost})`, 'ok'); }
+  else if (result.reason !== 'MOVE_GONE') showToast(reasonText(result, st), 'warn');
+}
+
 function onCanvasClick(evt) {
+  if (performance.now() < (game.view.suppressClickUntil || 0)) return;   // 방금 끌어서 옮김
   if (evt.ctrlKey) { onSecondaryClick(evt); return; }   // Mac Control + 클릭 = 우클릭
   const st = game.state;
   if (!isFieldActive(st)) return;
@@ -5523,6 +5666,7 @@ function onKeyDown(evt) {
 }
 
 function onMouseMove(evt) {
+  if (onDragMove(evt)) { game.view.mouse = toFieldPos(evt); return; }   // 끌어서 옮기는 중
   const p = toFieldPos(evt);
   const st = game.state;
   const remnant = isFieldActive(st) ? getRemnantAt(st, p.x, p.y) : null;
@@ -5530,7 +5674,7 @@ function onMouseMove(evt) {
   game.view.mouse = p;
   game.view.hoverRemnantUid = remnant ? remnant.uid : null;
   game.view.hoverUnitUid = unit ? unit.uid : null;
-  game.canvas.style.cursor = remnant || unit ? 'pointer' : st.selectedShadowId ? 'crosshair' : 'default';
+  game.canvas.style.cursor = remnant ? 'pointer' : unit ? (unit.kind === 'basic' ? 'grab' : 'pointer') : st.selectedShadowId ? 'crosshair' : 'default';   // 기본 그림자는 끌어서 옮길 수 있음
 }
 
 function onMouseLeave() {
@@ -5549,20 +5693,100 @@ function hintText(st) {
         const d = findBossData(st.chapterId), sp = GAME_DATA.field.spawnPoints[bossSpawnIndex(d)];
         return `보스 ${d.name}${josaIGa(d.name)} ${sp.label}쪽 출입구에서 나타납니다. 길목에 그림자를 배치하고 보스전을 시작하세요. 남은 잔영은 지금도 추출할 수 있습니다.`;
       }
-      return `카드를 고르고 전장 빈 곳을 클릭해 기본 그림자를 배치하세요 (최대 ${st.maxBasic}기). 남은 잔영은 지금도 추출할 수 있습니다.`;
+      return `카드를 고르고 전장 빈 곳을 클릭해 기본 그림자를 배치하세요 (최대 ${st.maxBasic}기). 배치한 그림자는 끌어서 옮길 수 있습니다.`;
     case STATUS.PLAYING:
-      return '적을 처치하면 그 자리에 잔영이 남습니다. 잔영을 클릭해 그림자를 추출하세요.';
+      return `적을 처치하면 그 자리에 잔영이 남습니다. 잔영을 클릭해 그림자를 추출하세요. 기본 그림자는 끌어서 옮길 수 있습니다 (에너지 ${GAME_DATA.config.moveCost}).`;
     default:
       return '';
   }
 }
 
 // 규칙 쪽에서 쌓은 알림 처리
+/* ---------- 그림자 에너지 획득 반응 (표시 전용) ----------
+ *  처치: 쓰러진 자리에서 보랏빛 구슬 3개가 튀어 올랐다가 HUD 에너지로 빨려 들어가고, 닿는 순간 숫자가 커졌다 돌아오며 빛남
+ *  웨이브 시작·보스 처치·환불: 구슬 없이 HUD 반응만 크게. 150에 가득 차면 숫자가 금빛 'MAX',
+ *  가득 찬 상태에서 처치하면 구슬이 전장 위쪽 끝에서 흩어지고 MAX가 반짝 (에너지가 버려지고 있다는 신호) */
+const ENERGY_ORB_TIME = 0.6;    // 구슬이 HUD까지 가는 시간(초, 실제 시간)
+const ENERGY_ORB_RGB = [178, 120, 255];
+function onEnergyEvent(ev) {
+  const [, kind, amount, gained, x, y] = ev.split(':');
+  const a = Number(amount), g = Number(gained);
+  if (kind === 'kill') {
+    game.view.energyOrbs.push({ x: Number(x), y: Number(y), t0: game.view.time, gained: g, full: g < a, seed: Math.random() * 1000, arrived: false });
+    if (game.view.energyOrbs.length > 40) game.view.energyOrbs.shift();
+  } else hudEnergyGain(g, true, g < a);
+}
+// HUD 숫자 반응: 커졌다 돌아오며 빛남 ('+N' 글자는 정신없어서 띄우지 않음). big = 웨이브·보스·환불, full = 넘쳐서 버려진 몫이 있음
+function hudEnergyGain(gained, big, full) {
+  const el = game.ui.energy;
+  if (!el) return;
+  // 반응 클래스는 하나만 (여러 개가 남으면 CSS 뒤쪽 애니메이션이 앞쪽을 덮어 반응이 안 보임). 끝나면 지움
+  const restart = (cls) => {
+    el.classList.remove('gain', 'gain-big', 'maxblink'); void el.offsetWidth; el.classList.add(cls);
+    clearTimeout(el._fxTimer); el._fxTimer = setTimeout(() => el.classList.remove(cls), 800);
+  };
+  if (gained > 0 && !full) restart(big ? 'gain-big' : 'gain');
+  if (full) restart('maxblink');   // 넘친 몫이 있음: MAX 반짝
+}
+// HUD 에너지 숫자 위치를 전장 좌표로 (구슬이 날아갈 곳)
+function syncEnergyTarget() {
+  const el = game.ui.energy, cv = game.canvas;
+  if (!el || !cv) return;
+  const er = el.getBoundingClientRect(), cr = cv.getBoundingClientRect(), F = GAME_DATA.field;
+  if (!cr.width) return;
+  game.view.energyTarget = { x: (er.left + er.width / 2 - cr.left) / cr.width * F.width, y: Math.max(-30, (er.bottom - cr.top) / cr.height * F.height) };
+}
+function drawEnergyOrbs(ctx, view) {
+  const orbs = view.energyOrbs;
+  if (!orbs || !orbs.length) return;
+  const T = view.time, tg = view.energyTarget || { x: 480, y: -20 };
+  ctx.save();
+  for (const o of orbs) {
+    const age = T - o.t0;
+    if (age < 0.15) {   // 처치 자리에서 작은 고리가 퍼짐
+      const q = age / 0.15, gy = spriteGroundY(o.y) - 14;
+      ctx.strokeStyle = rgba(ENERGY_ORB_RGB, 0.7 * (1 - q)); ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(o.x, gy, 4 + 10 * q, 0, Math.PI * 2); ctx.stroke();
+    }
+    const ty = o.full ? 10 : tg.y;   // 가득 찼으면 전장 위쪽 끝에서 흩어짐 (HUD에 닿지 않음)
+    for (let k = 0; k < 3; k++) {
+      const t = (age - k * 0.05) / ENERGY_ORB_TIME;
+      if (t < 0) continue;
+      const side = Math.sin(o.seed + k * 2.3), sx = o.x, sy = spriteGroundY(o.y) - 14;
+      const p1x = sx + side * 50, p1y = sy - 60 - k * 14;   // 튀어 오르는 쪽
+      const at = (u) => { const e = u * u * (1.6 - 0.6 * u); const m = 1 - e; return [m * m * sx + 2 * m * e * p1x + e * e * tg.x, m * m * sy + 2 * m * e * p1y + e * e * ty]; };
+      if (t < 1) {
+        for (let j = 3; j >= 0; j--) {   // 꼬리 + 구슬
+          const u = Math.max(0, t - j * 0.04), [px, py] = at(u), r = j ? 3 - j * 0.5 : 3.8;
+          ctx.fillStyle = rgba(j ? ENERGY_ORB_RGB : [235, 220, 255], j ? 0.6 - j * 0.13 : 0.95);
+          if (!j) { ctx.shadowColor = rgba(ENERGY_ORB_RGB, 1); ctx.shadowBlur = 12; }
+          ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill();
+          ctx.shadowBlur = 0;
+        }
+      } else if (o.full && t < 1.45) {   // 흩어짐: 작은 불씨 4개가 퍼지며 사라짐
+        const q = (t - 1) / 0.45, [px, py] = at(1);
+        ctx.fillStyle = rgba([200, 180, 230], 0.8 * (1 - q));
+        for (let j = 0; j < 4; j++) {
+          const a = o.seed + k * 1.7 + j * 1.57;
+          ctx.fillRect(Math.round(px + Math.cos(a) * 14 * q), Math.round(py + Math.sin(a) * 9 * q + 6 * q), 2, 2);
+        }
+      }
+    }
+    if (!o.arrived && age >= ENERGY_ORB_TIME + 0.1) {
+      o.arrived = true;
+      if (view.onEnergyArrive) view.onEnergyArrive(o);
+    }
+  }
+  ctx.restore();
+  view.energyOrbs = orbs.filter((o) => T - o.t0 < ENERGY_ORB_TIME + 0.8);
+}
+
 function consumeEvents(st) {
   for (const ev of st.events) {
     if (ev === 'REMNANT_EXPIRED') { showToast(REASON_TEXT.EXTRACT_GONE, 'warn', true); sfx('remnantGone'); }   // A05 (경고음 대신)
     if (ev === 'UNIT_LOST') showToast(REASON_TEXT.UNIT_LOST, 'warn', true);   // 사망음(A07)이 따로 남
     if (ev.startsWith('SPAWN_')) { game.view.crackFlash[Number(ev.slice(6))] = 1; sfx('spawn'); }   // 해당 균열 번쩍 + E01
+    if (ev.startsWith('ENERGY:')) onEnergyEvent(ev);
     playEventSfx(st, ev);
   }
   st.events.length = 0;
@@ -5587,6 +5811,7 @@ function josaIGa(word) { const c = word.charCodeAt(word.length - 1) - 0xac00; re
 // 보스 고유 기술이 발동하는 순간의 소리
 const BOSS_SKILL_SFX = { poison: 'poisonSplash', ambush: 'ambushStrike', totem: 'totemRise', lightning: 'thunder', dash: 'dashRush', beam: 'beamFire' };
 function playEventSfx(st, ev) {
+  if (ev === 'SHADOW_MOVED') { sfx('summon'); return; }   // 그림자를 옮김 (소환음)
   const bossName = () => (findBossData(st.chapterId) || {}).name || '보스';
   if (ev === 'BOSS_PREP') {
     const d = findBossData(st.chapterId), sp = GAME_DATA.field.spawnPoints[bossSpawnIndex(d)];
@@ -5684,13 +5909,20 @@ function syncUI() {
   setText(ui.chapter, `챕터 ${st.chapterId}`);
   setText(ui.wave, `${st.wave} / ${getWaveCount(st)}`);
   setText(ui.energy, `${st.energy} / ${st.maxEnergy}`);
+  ui.energy.classList.toggle('full', st.energy >= st.maxEnergy);   // 가득 차면 금빛 'MAX'
+  syncEnergyTarget();
   setText(ui.coreCur, `${st.coreHp}`);
   setText(ui.coreMax, `${st.maxCoreHp}`);
-  setText(ui.army, `${countArmy(st)} / ${C.maxArmy}`);
-  setText(ui.armyBasic, `기본 ${countBasic(st)}/${st.maxBasic}`);
+  setText(ui.army, `${countBasic(st)} / ${st.maxBasic}`);           // HUD: 큰 숫자 '그림자' = 기본 그림자 수
+  setText(ui.armyBasic, `군단 ${countArmy(st)}/${C.maxArmy}`);      //      작은 글씨 '군단' = 전체 군단 수 (기본 + 추출)
   setText(ui.status, STATUS_TEXT[st.status]);
   setText(ui.hint, hintText(st));
   ui.coreCur.classList.toggle('danger', st.coreHp <= CORE_HP_LOW);   // 거점 위 숫자와 같은 기준
+  // HUD 상황 강조: 거점 위험 칸 깜빡 · 에너지 MAX 금빛 칸 · 군단 가득 테두리 · 상태별 색
+  ui.coreCur.closest('.hud-item').classList.toggle('danger', st.coreHp <= CORE_HP_LOW && st.status !== STATUS.READY);
+  ui.energy.parentElement.classList.toggle('full', st.energy >= st.maxEnergy);
+  ui.army.parentElement.classList.toggle('full', countArmy(st) >= C.maxArmy);
+  if (ui.status.dataset.state !== st.status) ui.status.dataset.state = st.status;
   syncLowHpVignette(st);
 
   const basicFull = countBasic(st) >= st.maxBasic || countArmy(st) >= C.maxArmy;
@@ -5814,6 +6046,7 @@ function frame(now) {
 }
 
 function boot() {
+  game.view.onEnergyArrive = (o) => hudEnergyGain(o.gained, false, o.full);   // 흡수 구슬이 HUD에 닿는 순간 숫자 반응
   const errors = validateGameData(GAME_DATA);
   if (errors.length) {
     const box = $('data-error');
@@ -5853,6 +6086,9 @@ function boot() {
 
   game.canvas.addEventListener('click', onCanvasClick);
   game.canvas.addEventListener('mousemove', onMouseMove);
+  game.canvas.addEventListener('mousedown', onMouseDown);
+  window.addEventListener('mouseup', onMouseUp);   // 캔버스 밖에서 놓아도 끌기를 끝냄
+  window.addEventListener('mousemove', (evt) => { if (game.view.drag && evt.target !== game.canvas) onDragMove(evt); });
   game.canvas.addEventListener('mouseleave', onMouseLeave);
   $('app').addEventListener('contextmenu', onSecondaryClick);   // 기본 그림자 위: 회수 / 그 밖: 선택 해제
   $('btn-play').addEventListener('click', goToChapters);

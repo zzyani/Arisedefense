@@ -19,6 +19,7 @@ const GAME_DATA = {
     killReward: 10,
     waveStartBonus: 20,    // 2웨이브부터 [웨이브 시작]을 누를 때 지급
     recallRefundRate: 1.0, // 회수 시 환불 비율 (1.0 = 전액). 이번 준비 단계에서 배치한 기본 그림자만 회수 가능
+    moveCost: 10,          // 배치한 기본 그림자를 끌어다 옮길 때 드는 에너지 (전투 중에만. 준비 단계는 무료)
     dismantleRefundRate: 0.5, // 해체 시 반환 비율. 생성 때 실제 소비한 에너지 기준, 반올림 (SD-DISMANTLE)
     coreHp: 200,           // 거점 최대 HP. 거점에 붙은 적이 공격 간격마다 공격력만큼 깎음
     chapterCoreHeal: 100,  // (밸런스 확인 뒤 50 → 100) 챕터를 클리어하고 바로 다음 챕터를 새로 시작하면 남은 거점 HP를 이어받고 이만큼 회복 (최대 coreHp). 이어하기·다른 챕터는 적용 안 함
