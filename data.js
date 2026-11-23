@@ -145,6 +145,7 @@ const GAME_DATA = {
   extraction: {
     remnantChance: 1.0,     // 잔영 생성 확률 (1.0 = 100%)
     remnantDuration: 12,    // 잔영 지속 시간(초). 전투 중에만 줄어듦
+    prepRemnantTime: 5,     // 웨이브가 끝난 뒤 준비 단계에서 남은 잔영을 추출할 수 있는 시간(초, 남은 시간이 이보다 길면 이만큼으로 줄임). 다음 전투가 시작되면 남은 잔영은 사라짐
     detectionRadius: 180,   // 그림자 기준 적 탐색 반경
     maxRoamRadius: 220,     // 생성 위치(origin) 기준 최대 이동 반경
     returnThreshold: 20,    // 추격 대상이 없고 원점에서 이만큼 떨어지면 복귀
@@ -171,7 +172,7 @@ const GAME_DATA = {
   // 적은 배열 순서대로 spawnInterval 간격으로 생성됩니다 (첫 적은 웨이브 시작 즉시).
   // 북·남 출현 지점은 거점과 가까워(약 235px) 동·서(약 456px)보다 빨리 도착합니다.
   chapters: [
-    { chapterId: 1, name: '카르테논 신전', desc: '늑대와 얼음 기수가 몰려오는 첫 관문',
+    { chapterId: 1, name: '카르테논 신전', desc: '붉은 늑대와 지네, 코브라가 몰려오는 첫 관문',
       theme: { map: 'assets/map.webp', decor: 'temple' }, waves: [
       { waveId: 1, spawnInterval: 2.5, enemies: [   // 첫 웨이브는 거점에서 먼 동·서쪽에서만 (배치를 익힐 시간)
         { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_001', spawn: 1 }, { enemyId: 'EN_001', spawn: 3 },
@@ -202,7 +203,7 @@ const GAME_DATA = {
         { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_002', spawn: 2 }, { enemyId: 'EN_001', spawn: 1 },
       ] },
     ] },
-    { chapterId: 2, name: '설원 숲', desc: '코브라가 섞여 사방에서 동시에 밀려오는 눈 덮인 숲',
+    { chapterId: 2, name: '설원 숲', desc: '얼음 엘프와 말 탄 얼음 요정, 얼음 곰이 사방에서 밀려오는 눈 덮인 숲',
       theme: { map: 'assets/maps/ch2.webp', decor: 'snow', spawn: { N: { y: 6, revealTop: null } } }, waves: [   // 북쪽: 숲길이 맵 위 끝까지 열려 있어 가리지 않고 위 끝에서 걸어 들어옴
       { waveId: 1, spawnInterval: 2.2, enemies: [
         { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_001', spawn: 2 }, { enemyId: 'EN_002', spawn: 1 },
@@ -355,7 +356,7 @@ const GAME_DATA = {
         { enemyId: 'EN_001', spawn: 0 }, { enemyId: 'EN_006', spawn: 2 },
       ] },
     ] },
-    { chapterId: 6, name: '카르테논 신전', desc: '모든 적이 다시 모여드는 마지막 결전',
+    { chapterId: 6, name: '카르테논 신전', desc: '여섯 유형의 적이 모두 돌 석상으로 깨어나는 마지막 결전',
       theme: { map: 'assets/maps/ch6.webp', decor: 'darktemple', spawn: { N: { y: 80, revealTop: 86 } } }, waves: [   // 북쪽: 석상 턱 아래에서 조금 더 내려와 나옴
       { waveId: 1, spawnInterval: 1.9, enemies: [
         { enemyId: 'EN_001', spawn: 3 }, { enemyId: 'EN_006', spawn: 1 }, { enemyId: 'EN_002', spawn: 0 },

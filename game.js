@@ -25,7 +25,7 @@ const STATUS = Object.freeze({
   READY: 'READY',             // 타이틀 화면
   PREPARATION: 'PREPARATION', // 병력 배치 (전투 정지)
   PLAYING: 'PLAYING',         // 전투 진행
-  PAUSED: 'PAUSED',           // 일시정지 (전투 중 P/Esc, 탭 전환 시 자동)
+  PAUSED: 'PAUSED',           // 일시정지 (전투·준비 중 P/Esc, 전투 중 탭 전환 시 자동)
   WAVE_CLEAR: 'WAVE_CLEAR',   // 웨이브 종료 처리
   VICTORY: 'VICTORY',
   DEFEAT: 'DEFEAT',
@@ -34,9 +34,9 @@ const STATUS = Object.freeze({
 // 허용된 상태 전이. 여기에 없는 전이는 무시되고 콘솔에 경고가 남습니다.
 const TRANSITIONS = Object.freeze({
   READY:       ['PREPARATION'],
-  PREPARATION: ['PLAYING', 'READY'],
+  PREPARATION: ['PLAYING', 'READY', 'PAUSED'],   // → PAUSED: 준비 단계에서도 메뉴(계속하기·처음부터·챕터 선택)
   PLAYING:     ['PAUSED', 'WAVE_CLEAR', 'VICTORY', 'DEFEAT', 'PREPARATION'],   // → PREPARATION: 5웨이브 일반 적을 다 잡으면 보스전 준비
-  PAUSED:      ['PLAYING', 'READY'],
+  PAUSED:      ['PLAYING', 'PREPARATION', 'READY'],   // 일시정지 전 상태로 돌아감
   WAVE_CLEAR:  ['PREPARATION', 'READY'],
   VICTORY:     ['READY'],
   DEFEAT:      ['READY'],
@@ -497,7 +497,14 @@ function createRemnant(state, enemy) {
     y: enemy.y,
     ttl: duration,
     duration,
+    age: 0,   // 생긴 뒤 지난 시간 (나타나는 순간 퍼지는 고리 연출용)
   });
+}
+
+// 웨이브가 끝나 준비 단계로 넘어갈 때: 남은 잔영은 prepRemnantTime초 동안만 추출 가능 (준비 단계에서도 시간이 흐름)
+function holdRemnantsForPrep(state) {
+  const T = GAME_DATA.extraction.prepRemnantTime;
+  for (const r of state.remnants) { r.ttl = Math.min(r.ttl, T); r.duration = T; }
 }
 
 function findRemnant(state, uid) {
@@ -507,7 +514,7 @@ function findRemnant(state, uid) {
 
 function getRemnantAt(state, x, y) {
   let best = null;
-  let bestDist = 16;
+  let bestDist = 20;   // 누르기 쉽게 웅덩이보다 조금 넓게
   for (const r of state.remnants) {
     if (r.ttl <= 0) continue;
     const d = dist(x, y, r.x, r.y);
@@ -705,6 +712,8 @@ function findChaseTarget(state, shadow) {
 function startWave(state) {
   if (state.status !== STATUS.PREPARATION) return false;
   if (!getWaveData(state, state.wave)) return false;
+  state.remnants = [];   // 준비 단계에 추출하지 않은 잔영은 전투가 시작되면 사라짐
+  state.selectedRemnantUid = null;
   if (state.bossPrep) {   // 보스전 시작: 일반 적은 이미 다 나왔으니 보스만 (bossDelay초 뒤 등장)
     state.bossPrep = false;
     state.bossReady = true;
@@ -719,8 +728,8 @@ function startWave(state) {
   return setStatus(state, STATUS.PLAYING);
 }
 
-// WAVE_CLEAR → 다음 웨이브 PREPARATION
-// 추출 그림자는 HP 0 또는 게임 종료까지 유지. 잔영은 웨이브가 끝날 때 모두 사라지므로 준비 단계에는 없음
+// WAVE_CLEAR → 다음 웨이브 PREPARATION (화면은 WAVE_CLEAR가 되는 순간 저장하고 곧바로 이 함수를 부름)
+// 추출 그림자는 HP 0 또는 게임 종료까지 유지. 마지막 적들의 잔영은 준비 단계에서 prepRemnantTime초 동안 추출 가능
 function goToNextWave(state) {
   if (state.status !== STATUS.WAVE_CLEAR) return false;
   state.wave += 1;
@@ -738,7 +747,7 @@ function goToNextWave(state) {
  *  - 패배하거나 챕터를 클리어하면 그 챕터의 이어하기는 지워짐 (도중에 나가면 마지막 클리어 웨이브부터) */
 const SAVE_VERSION = 1;
 
-function createEmptySave() { return { version: SAVE_VERSION, cleared: {}, resume: {}, carry: null }; }   // carry: 다음 챕터로 이어받을 거점 HP { to, hp }
+function createEmptySave() { return { version: SAVE_VERSION, cleared: {}, resume: {}, carry: null, tutorialSeen: false }; }   // carry: 다음 챕터로 이어받을 거점 HP { to, hp } · tutorialSeen: 튜토리얼을 봤거나 건너뜀
 
 function isNum(v) { return typeof v === 'number' && Number.isFinite(v); }
 
@@ -756,6 +765,7 @@ function normalizeSave(raw) {
     const r = raw.resume && raw.resume[id];
     if (isValidRun(r, ch)) save.resume[id] = r;
   }
+  save.tutorialSeen = raw.tutorialSeen === true;
   const cy = raw.carry;   // 챕터 클리어 뒤 아직 시작하지 않은 다음 챕터의 거점 HP
   if (cy && GAME_DATA.chapters.some((c) => c.chapterId === cy.to) && isNum(cy.hp) && cy.hp > 0) save.carry = { to: cy.to, hp: cy.hp };
   return save;
@@ -853,13 +863,14 @@ function recordChapterClear(save, state) {
  * 적·그림자 이동, 공격, 쿨타임, 적 생성, 잔영 타이머가 모두 정지한다.
  * 소환·추출·해체도 isFieldActive가 false라 막힘. */
 function pauseGame(state) {
-  if (state.status !== STATUS.PLAYING) return false;
+  if (state.status !== STATUS.PLAYING && state.status !== STATUS.PREPARATION) return false;
   return setStatus(state, STATUS.PAUSED);
 }
 
+// 일시정지 전 상태(전투 중 또는 배치 준비)로 돌아감
 function resumeGame(state) {
   if (state.status !== STATUS.PAUSED) return false;
-  return setStatus(state, STATUS.PLAYING);
+  return setStatus(state, state.previousStatus === STATUS.PREPARATION ? STATUS.PREPARATION : STATUS.PLAYING);
 }
 
 
@@ -867,10 +878,11 @@ function resumeGame(state) {
  * [4] 전투 틱
  *  사망한 객체는 반복 도중 바로 지우지 않고 alive=false로 표시한 뒤
  *  틱 마지막에 한꺼번에 제거합니다.
- *  일시정지·준비 단계에서는 이 함수가 아무것도 하지 않으므로
- *  이동, 공격, 잔영 타이머가 모두 멈춥니다.
+ *  일시정지 중에는 이 함수가 아무것도 하지 않으므로 이동, 공격, 잔영 타이머가 모두 멈춥니다.
+ *  준비 단계에서는 잔영 타이머만 흐름 (웨이브가 끝난 뒤 남은 잔영을 prepRemnantTime초 안에 추출)
  * ================================================================== */
 function updateGame(state, dt) {
+  if (state.status === STATUS.PREPARATION) { updateRemnants(state, dt); return; }
   if (state.status !== STATUS.PLAYING) return;
   state.elapsed += dt;
 
@@ -926,7 +938,7 @@ function updateSpawning(state, dt) {
 }
 
 function updateRemnants(state, dt) {
-  for (const r of state.remnants) r.ttl -= dt;
+  for (const r of state.remnants) { r.ttl -= dt; r.age = (r.age || 0) + dt; }
   const before = state.selectedRemnantUid;
   state.remnants = state.remnants.filter((r) => r.ttl > 0);
   if (before !== null && !findRemnant(state, before)) {
@@ -1170,12 +1182,13 @@ function isBossWave(state) { return state.wave === getWaveCount(state) && !!find
 // 보스 출입구 번호 (data의 spawn: 'N'·'E'·'S'·'W', 없으면 북쪽)
 function bossSpawnIndex(d) { return Math.max(0, GAME_DATA.field.spawnPoints.findIndex((sp) => sp.id === (d.spawn || 'N'))); }
 
-// 보스전 준비 단계로: 웨이브 사이처럼 배치할 수 있고, 시작을 누르면 보스가 나옴 (잔영은 남겨 둬서 추출 가능)
+// 보스전 준비 단계로: 웨이브 사이처럼 배치할 수 있고, 시작을 누르면 보스가 나옴 (남은 잔영은 prepRemnantTime초 동안 추출 가능)
 function enterBossPrep(state) {
   for (const u of state.basicUnits) {   // 돌격하는 그림자는 배치한 자리로
     if (u.mobile) { u.x = u.originX; u.y = u.originY; u.targetId = null; u.moving = false; }
   }
   state.effects = []; state.corpses = []; state.pendingHits = [];
+  holdRemnantsForPrep(state);   // 마지막 적들의 잔영: 준비 단계에서 prepRemnantTime초 동안 추출 가능
   state.bossPrep = true;
   setStatus(state, STATUS.PREPARATION);
   state.events.push('BOSS_PREP');
@@ -1627,9 +1640,9 @@ function checkWaveComplete(state) {
   if (state.spawnIndex < wave.enemies.length || state.enemies.length > 0) return;
   if (isBossWave(state) && !(state.boss && state.boss.phase === 'dead')) return;   // 보스가 아직 안 나왔거나 살아 있음
   const isLast = state.wave >= getWaveCount(state);   // 챕터 마지막 웨이브 → 챕터 클리어
-  // 웨이브가 끝나면 추출하지 않은 잔영은 모두 사라짐 → 준비 단계에는 잔영이 남지 않음
-  state.remnants = [];
-  state.selectedRemnantUid = null;
+  // 마지막 적들의 잔영은 준비 단계에서 잠깐 더 추출 가능 (챕터 클리어면 모두 사라짐)
+  if (isLast) { state.remnants = []; state.selectedRemnantUid = null; }
+  else holdRemnantsForPrep(state);
   for (const u of state.basicUnits) {   // 돌격하는 그림자는 배치한 자리로 돌려놓음 (다음 웨이브 준비·저장은 그 자리 기준)
     if (u.mobile) { u.x = u.originX; u.y = u.originY; u.targetId = null; u.moving = false; }
   }
@@ -1730,7 +1743,7 @@ function validateGameData(data) {
 
   const ex = data.extraction;
   if (typeof ex.remnantChance !== 'number' || ex.remnantChance < 0 || ex.remnantChance > 1) errors.push('extraction: remnantChance는 0~1 사이 숫자여야 합니다.');
-  for (const k of ['remnantDuration', 'detectionRadius', 'maxRoamRadius', 'returnThreshold']) {
+  for (const k of ['remnantDuration', 'prepRemnantTime', 'detectionRadius', 'maxRoamRadius', 'returnThreshold']) {
     if (!isPos(ex[k])) errors.push(`extraction: ${k} 값이 올바르지 않습니다 (${ex[k]}).`);
   }
   for (const e of data.enemies) {
@@ -4738,6 +4751,60 @@ function loadFxSheets() {
   }
 }
 
+// 잔영 강조 (표시 전용): 바닥 빛 + 위로 솟는 빛기둥 + 떠오르는 도트 입자 + 나타나는 순간 퍼지는 고리.
+// 어두운·보라빛 맵에서도 묻히지 않도록 '더하기'로 밝게 그림 (잔영 그림은 그 위에)
+const REMNANT_LOW_TIME = 3;   // 남은 시간이 이보다 적으면 고리·빛이 깜빡
+function drawRemnantGlow(ctx, r, gx, cy, time) {
+  const pulse = 0.5 + 0.5 * Math.sin(time * 4 + r.uid * 1.7);
+  const low = r.ttl < REMNANT_LOW_TIME;
+  const fade = low ? (Math.floor(time * 6) % 2 === 0 ? 1 : 0.55) : 1;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  // 바닥 빛 (납작한 타원)
+  ctx.save();
+  ctx.translate(gx, cy);
+  ctx.scale(1, 0.4);
+  const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 32);
+  g.addColorStop(0, `rgba(200, 165, 255, ${(0.42 + 0.18 * pulse) * fade})`);
+  g.addColorStop(1, 'rgba(110, 70, 255, 0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(0, 0, 32, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  // 빛기둥: 웅덩이에서 위로 옅어지는 세로 빛 (바깥 넓은 빛 + 가운데 밝은 심)
+  const H = 46 + 6 * pulse;
+  const beam = (w, a) => {
+    const lg = ctx.createLinearGradient(0, cy, 0, cy - H);
+    lg.addColorStop(0, `rgba(215, 190, 255, ${a * fade})`);
+    lg.addColorStop(1, 'rgba(160, 120, 255, 0)');
+    ctx.fillStyle = lg;
+    ctx.fillRect(Math.round(gx - w / 2), Math.round(cy - H), w, Math.round(H));
+  };
+  beam(14, 0.22 + 0.12 * pulse);
+  beam(4, 0.45 + 0.2 * pulse);
+  // 떠오르는 도트 입자 4개 (2px 네모)
+  ctx.fillStyle = '#efe6ff';
+  for (let i = 0; i < 4; i++) {
+    const ph = (time * 0.55 + i / 4 + r.uid * 0.37) % 1;
+    ctx.globalAlpha = (1 - ph) * 0.9 * fade;
+    const x = gx + Math.sin(ph * 6 + i * 2.1 + r.uid) * 8;
+    ctx.fillRect(Math.round(x) - 1, Math.round(cy - 4 - ph * 42) - 1, 2, 2);
+  }
+  ctx.globalAlpha = 1;
+  // 나타나는 순간 퍼지는 고리 (0.5초)
+  const age = r.age || 0;
+  if (age < 0.5) {
+    const p = age / 0.5;
+    ctx.strokeStyle = `rgba(235, 220, 255, ${1 - p})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(gx, cy, 10 + 26 * p, (10 + 26 * p) * 0.38, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawRemnantSprite(ctx, r, time, isSelected, isHover) {
   const R = REMNANT_FX;
   // 다음 프레임으로 서서히 겹쳐 바뀌게 해서 뚝뚝 끊기지 않도록. 잔영마다 박자를 어긋나게
@@ -4750,13 +4817,23 @@ function drawRemnantSprite(ctx, r, time, isSelected, isHover) {
   const gx = Math.round(r.x * k) / k;
   const gy = Math.round((r.y + R.feetDrop) * k) / k;   // 바닥선
   const cy = gy - (R.groundY - R.baseY);                // 웅덩이 가운데
-  // 남은 시간: 웅덩이 둘레 타원 호 (12시 방향부터 시계 방향으로 줄어듦)
+  drawRemnantGlow(ctx, r, gx, cy, time);
+  // 남은 시간: 웅덩이 둘레 타원 호 (12시 방향부터 시계 방향으로 줄어듦). 어두운 받침선 위에 그려 어느 맵에서도 보이게,
+  // 3초 남으면 흰빛·붉은빛으로 깜빡
+  const low = r.ttl < REMNANT_LOW_TIME;
+  const blinkOn = Math.floor(time * 6) % 2 === 0;
+  const end = -Math.PI / 2 + Math.PI * 2 * Math.max(0, r.ttl / r.duration);
   ctx.save();
-  ctx.strokeStyle = COLORS.remnantRing;
-  ctx.globalAlpha = 0.85;
-  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = 'rgba(6, 3, 16, 0.6)';
+  ctx.lineWidth = 5;
   ctx.beginPath();
-  ctx.ellipse(gx, cy, R.ring.rx, R.ring.ry, 0, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (r.ttl / r.duration));
+  ctx.ellipse(gx, cy, R.ring.rx, R.ring.ry, 0, -Math.PI / 2, end);
+  ctx.stroke();
+  ctx.strokeStyle = low ? (blinkOn ? '#ffffff' : '#ff7d96') : '#e2d6ff';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.ellipse(gx, cy, R.ring.rx, R.ring.ry, 0, -Math.PI / 2, end);
   ctx.stroke();
   ctx.restore();
   ctx.save();
@@ -4951,7 +5028,7 @@ function render(ctx, state, view) {
   for (const r of state.remnants) {
     const isSelected = state.selectedRemnantUid === r.uid;
     const isHover = view.hoverRemnantUid === r.uid;
-    if (REMNANT_FX.img) { drawRemnantSprite(ctx, r, state.elapsed, isSelected, isHover); continue; }
+    if (REMNANT_FX.img) { drawRemnantSprite(ctx, r, view.time, isSelected, isHover); continue; }   // 실제 시간: 준비 단계에서도 움직임
     const pulse = 0.55 + 0.25 * Math.sin(view.time * 5 + r.uid);
     ctx.globalAlpha = pulse;
     ctx.fillStyle = COLORS.remnant;
@@ -5221,6 +5298,7 @@ const game = {
   lastStatus: null,    // 상태가 바뀌는 순간(웨이브 클리어·승리·패배)을 잡아 저장하기 위함
   clearInfo: null,     // 방금 챕터를 클리어한 결과 (최고 기록·해금 안내용)
   screen: 'title',     // READY 상태에서 보여줄 화면: 'title' | 'chapters'
+  modal: null,         // 열려 있는 안내 창: null | 'tutorial' | 'help' (열려 있는 동안 전투·잔영 시간이 멈춤)
   confirmRestartId: null,   // '처음부터'를 한 번 누른 챕터 (한 번 더 누르면 진행 삭제 후 시작)
 };
 
@@ -5249,9 +5327,15 @@ function persistSave() {
 // 상태가 바뀐 순간 한 번: 웨이브 클리어 → 이어하기 저장, 챕터 클리어 → 기록·해금, 패배 → 이어하기 삭제
 function onStatusChanged(st) {
   if (st.status === STATUS.WAVE_CLEAR) {
+    // 창을 띄우지 않고: 진행 저장 → 알림 → 곧바로 다음 웨이브 배치 준비 (나가기는 준비 단계의 메뉴 P/Esc에서)
     game.save.resume[st.chapterId] = serializeRun(st);
     persistSave();
     sfx('waveClear');   // F02
+    const cleared = st.wave, kills = st.stats.waveKills;
+    goToNextWave(st);
+    game.lastStatus = st.status;
+    const left = st.remnants.length ? ` · 남은 잔영 ${GAME_DATA.extraction.prepRemnantTime}초 안에 추출 가능` : '';
+    showToast(`WAVE ${cleared} 방어 성공 · 처치 ${kills} · 진행 저장됨${left}`, 'ok', true, 2600);
   } else if (st.status === STATUS.PREPARATION && st.bossPrep) {   // 보스전 준비: 여기서 나가도 보스전부터 이어함
     game.save.resume[st.chapterId] = serializeRun(st);
     persistSave();
@@ -5271,13 +5355,13 @@ function onStatusChanged(st) {
 
 function $(id) { return document.getElementById(id); }
 
-function showToast(text, type, silent) {
+function showToast(text, type, silent, duration = 1400) {
   if (type === 'warn' && !silent) sfx('warn');   // U03: 실패·경고 메시지마다 경고음
   const el = game.ui.toast;
   el.textContent = text;
   el.className = `toast show ${type || ''}`;
   clearTimeout(game.toastTimer);
-  game.toastTimer = setTimeout(hideToast, 1400);
+  game.toastTimer = setTimeout(hideToast, duration);
 }
 
 function hideToast() {
@@ -5507,6 +5591,9 @@ function newGame(chapterId = game.state.chapterId) {
     st.coreHp = Math.min(st.maxCoreHp, Math.round(carry.hp) + heal);
     showToast(`거점 HP ${Math.round(carry.hp)} + ${heal} 회복 → ${st.coreHp}`, 'ok');
   }
+  // 첫 챕터를 처음 시작할 때 한 번만 튜토리얼 (이미 클리어한 기록이 있으면 띄우지 않음. 조작법 창에서 다시 볼 수 있음)
+  const first = GAME_DATA.chapters[0].chapterId;
+  if (chapterId === first && !game.save.tutorialSeen && !game.save.cleared[first]) openModal('tutorial');
 }
 
 // 다음 챕터로 이어받을 거점 HP를 꺼냄. 챕터를 시작하면 어느 챕터든 지움 (다른 챕터를 고르거나 이어하기면 적용 안 함)
@@ -5628,7 +5715,7 @@ function onPause() {
 }
 
 function onResume() {
-  if (resumeGame(game.state)) { showToast('전투 재개', 'ok'); sfx('resume'); }   // U07
+  if (resumeGame(game.state)) { showToast(game.state.status === STATUS.PLAYING ? '전투 재개' : '배치 준비', 'ok'); sfx('resume'); }   // U07
 }
 
 function togglePause() {
@@ -5638,7 +5725,7 @@ function togglePause() {
 
 // 다른 탭·창으로 전환해 화면이 가려지면 자동으로 일시정지
 function onVisibilityChange() {
-  if (document.hidden) onPause();
+  if (document.hidden && game.state.status === STATUS.PLAYING) onPause();   // 준비 단계는 멈출 것이 없어서 그대로
 }
 
 function hasSelection(st) {
@@ -5648,10 +5735,25 @@ function hasSelection(st) {
 function onKeyDown(evt) {
   if (evt.repeat) return;
   const key = evt.key.toLowerCase();
+  if (game.modal) { onModalKey(evt, key); return; }
+  if (key === 'h') { openModal('help'); return; }
   if (key === 'd') { game.view.showRanges = !game.view.showRanges; return; }
   if (key === 'p') { togglePause(); return; }
   if (key === 'm') { toggleBgm(); return; }
   if (key === 'n') { toggleSfx(); return; }
+  if (key === 'e' || key === ' ') {   // 추출: 선택한 잔영, 없으면 마우스가 올라간 잔영
+    const st = game.state;
+    if (!isFieldActive(st)) return;
+    if (st.selectedRemnantUid === null && game.view.hoverRemnantUid !== null) {
+      st.selectedRemnantUid = game.view.hoverRemnantUid;
+      st.selectedShadowId = null;
+      st.selectedUnitUid = null;
+    }
+    if (st.selectedRemnantUid === null) return;
+    evt.preventDefault();   // 스페이스: 화면 스크롤·포커스된 버튼 누르기 막기
+    onExtract();
+    return;
+  }
   if (key === 'escape') {
     // Esc: 일시정지 중이면 계속하기 → 선택된 것이 있으면 선택 해제 → 전투 중이면 일시정지
     const st = game.state;
@@ -5691,11 +5793,12 @@ function hintText(st) {
     case STATUS.PREPARATION:
       if (st.bossPrep) {
         const d = findBossData(st.chapterId), sp = GAME_DATA.field.spawnPoints[bossSpawnIndex(d)];
-        return `보스 ${d.name}${josaIGa(d.name)} ${sp.label}쪽 출입구에서 나타납니다. 길목에 그림자를 배치하고 보스전을 시작하세요. 남은 잔영은 지금도 추출할 수 있습니다.`;
+        return `보스 ${d.name}${josaIGa(d.name)} ${sp.label}쪽 출입구에서 나타납니다. 길목에 그림자를 배치하고 보스전을 시작하세요.${st.remnants.length ? ' 남은 잔영은 사라지기 전에 추출할 수 있습니다.' : ''}`;
       }
+      if (st.remnants.length) return '남은 잔영은 사라지기 전에 추출할 수 있습니다 (잔영 클릭 · E/Space). 다음 웨이브를 시작하면 남은 잔영은 사라집니다.';
       return `카드를 고르고 전장 빈 곳을 클릭해 기본 그림자를 배치하세요 (최대 ${st.maxBasic}기). 배치한 그림자는 끌어서 옮길 수 있습니다.`;
     case STATUS.PLAYING:
-      return `적을 처치하면 그 자리에 잔영이 남습니다. 잔영을 클릭해 그림자를 추출하세요. 기본 그림자는 끌어서 옮길 수 있습니다 (에너지 ${GAME_DATA.config.moveCost}).`;
+      return `적을 처치하면 그 자리에 잔영이 남습니다. 잔영을 클릭해 그림자를 추출하세요 (E/Space). 기본 그림자는 끌어서 옮길 수 있습니다 (에너지 ${GAME_DATA.config.moveCost}).`;
     default:
       return '';
   }
@@ -5896,8 +5999,26 @@ function syncExtractPanel(st) {
   setText(ui.extractName, `${enemy.name} 몬스터의 그림자`);
   setText(ui.extractStats, `HP ${data.maxHp} · ATK ${data.attack} · 이동 속도 ${data.moveSpeed}`);
   setText(ui.extractCost, `추출 비용: 에너지 ${data.cost}`);
-  setText(ui.extractTime, `잔여 시간: ${remnant.ttl.toFixed(1)}초${st.status === STATUS.PLAYING ? '' : ' (정지)'}`);
+  setText(ui.extractTime, `잔여 시간: ${remnant.ttl.toFixed(1)}초`);
   ui.btnExtract.classList.toggle('poor', !canExtract(st, remnant.uid).ok);
+  placeExtractPanel(remnant);
+}
+
+// 추출 창을 잔영 바로 옆에 띄움 (오른쪽, 넘치면 왼쪽). 위아래는 전장 안으로 맞춤. 창 크기가 바뀌어도 매 프레임 다시 맞춤
+const EXTRACT_PANEL_GAP = 26;   // 잔영 가운데에서 창까지(px, 화면 기준)
+function placeExtractPanel(r) {
+  const panel = game.ui.extractPanel, cv = game.canvas, wrap = panel.parentElement;
+  const k = cv.clientWidth / GAME_DATA.field.width;
+  const px = cv.offsetLeft + cv.clientLeft + r.x * k;
+  const py = cv.offsetTop + cv.clientTop + r.y * k;
+  const w = panel.offsetWidth, h = panel.offsetHeight, W = wrap.clientWidth, H = wrap.clientHeight;
+  let left = px + EXTRACT_PANEL_GAP;
+  if (left + w > W - 8) left = px - EXTRACT_PANEL_GAP - w;   // 오른쪽에 자리가 없으면 왼쪽
+  left = Math.max(8, Math.min(W - w - 8, left));
+  const top = Math.max(8, Math.min(H - h - 8, py - h / 2));
+  const L = `${Math.round(left)}px`, T = `${Math.round(top)}px`;
+  if (panel.style.left !== L) panel.style.left = L;
+  if (panel.style.top !== T) panel.style.top = T;
 }
 
 function syncUI() {
@@ -5934,13 +6055,21 @@ function syncUI() {
 
   setHidden(ui.btnStart, st.status !== STATUS.PREPARATION);
   setText(ui.btnStart, st.bossPrep ? '보스전 시작' : `WAVE ${st.wave} 시작`);
-  setHidden(ui.btnPause, st.status !== STATUS.PLAYING);   // 웨이브 시작 버튼 자리에 표시
+  setHidden(ui.btnPause, st.status !== STATUS.PLAYING && st.status !== STATUS.PREPARATION);   // 전투 중: 시작 버튼 자리, 준비 단계: 시작 버튼 아래 '메뉴'
+  ui.btnPause.classList.toggle('as-menu', st.status === STATUS.PREPARATION);
+  setText(ui.btnPauseLabel, st.status === STATUS.PREPARATION ? '메뉴' : '일시정지');
 
   syncExtractPanel(st);
   syncUnitPanel(st);
 
   setHidden(ui.overlayPause, st.status !== STATUS.PAUSED);
   if (st.status === STATUS.PAUSED) {
+    const prep = st.previousStatus === STATUS.PREPARATION;
+    setText(ui.pauseTitle, prep ? '메뉴' : '일시정지');
+    const desc = prep   // 강조 단어는 <em> (연두)
+      ? (st.wave >= 2 || st.bossPrep ? `[배치 준비 중입니다. 지금 나가도 챕터 선택에서 <em>${st.bossPrep ? '보스전' : `WAVE ${st.wave}`}</em>부터 이어할 수 있습니다.]` : '[배치 준비 중입니다.]')
+      : '[전투가 멈췄습니다. <em>적·그림자·잔영 시간</em>이 모두 정지 상태입니다.]';
+    if (ui.pauseDesc.dataset.html !== desc) { ui.pauseDesc.dataset.html = desc; ui.pauseDesc.innerHTML = desc; }
     setText(ui.pauseStats, `챕터 ${st.chapterId} · WAVE ${st.wave} · 처치 ${st.stats.waveKills} · 군단 ${countArmy(st)}/${C.maxArmy} · 거점 HP ${st.coreHp}/${st.maxCoreHp} · 에너지 ${st.energy}`);
   }
 
@@ -5985,6 +6114,261 @@ function syncUI() {
 }
 
 
+/* ---------- 튜토리얼 · 조작법 창 ----------
+ *  첫 챕터를 처음 시작할 때 튜토리얼 4장(건너뛰기 가능), HUD 위 '? 조작법' 버튼·H 키로 조작법 창.
+ *  열려 있는 동안 전투·잔영 시간이 멈춤(frame). 상태(status)는 바꾸지 않음
+ *  튜토리얼 그림은 따로 만든 전장 상태(demo.state)를 실제 규칙 함수로 움직이고 render()로 그린 것 → 게임과 늘 같은 모습, 진행 중인 판에는 영향 없음 */
+const TUT_W = 520, TUT_H = 220, TUT_X = 10, TUT_Y = 185;   // 그림 크기와, 전장에서 잘라 보여줄 곳(왼쪽 위). 서쪽 출입구 ~ 거점
+const TUT_CARD = { x: 26, y: 344, w: 118, h: 50 };         // 배치 장면의 작은 카드 (전장 좌표)
+
+const TUTORIAL = [
+  {
+    title: '그림자 배치', dur: 5.5,
+    lines: () => ['아래 카드를 고르고(숫자 키 <em>1~6</em>) 전장 빈 곳을 <em>클릭</em>하면 그림자를 세웁니다.',
+      '<em>붉은 화살표</em>는 적이 나오는 곳입니다. 적이 오는 길목을 막고 웨이브를 시작하세요.'],
+    setup(d) { d.state.status = STATUS.PREPARATION; d.ui.card = true; },
+    cursor: [[0, 300, 372], [1, 88, 372], [1.6, 88, 372], [2.9, 380, 290], [5.5, 380, 290]], clicks: [1.3, 3.2],
+    tick(d, t) {
+      d.once(1.3, () => { d.state.selectedShadowId = 'SH_002'; });
+      d.once(3.2, () => { summonShadow(d.state, 'SH_002', 380, 290); d.state.selectedShadowId = null; });
+      d.view.mouse = t > 1.3 ? d.cursorAt(t) : null;
+    },
+  },
+  {
+    title: '거점 방어', dur: 7,
+    lines: () => ['그림자는 사거리에 들어온 적을 <em>스스로 공격</em>합니다. 적을 처치하면 <em>그림자 에너지</em>를 얻습니다.',
+      '적이 거점에 닿으면 거점 HP가 계속 줄어듭니다. <em>0이 되면 패배</em>합니다.'],
+    setup(d) { d.battle(); d.state.energy = 80; d.unit(380, 290); d.enemy(225, 292); d.ui.energy = true; },
+    tick() {},
+  },
+  {
+    title: '그림자 추출', dur: 8.5,
+    lines: () => ['적이 쓰러진 자리의 <em>잔영을 클릭</em>하고 <em>일어나라!</em>를 누르세요 (<em>E</em> · <em>Space</em> 키).',
+      `에너지를 써서 추출한 그림자는 주변의 적을 쫓아가 싸웁니다. 잔영은 <em>${GAME_DATA.extraction.remnantDuration}초</em> 뒤 사라집니다.`],
+    setup(d) { d.battle(); d.state.energy = 80; d.ui.energy = true; createRemnant(d.state, { typeId: 'EN_001', x: 250, y: 280 }); },
+    cursor: [[0, 400, 360], [1.2, 252, 288], [2, 252, 288], [2.9, 372, 304], [8.5, 372, 304]], clicks: [1.5, 3.2], hideCursor: 4,
+    tick(d) {
+      d.once(1.5, () => { d.state.selectedRemnantUid = d.state.remnants[0].uid; d.ui.popup = true; });
+      d.once(3.2, () => { d.ui.popup = false; extractShadow(d.state, d.state.selectedRemnantUid); d.enemy(90, 292).hp = 40; });
+    },
+  },
+  {
+    title: '군단 운용', dur: 5,
+    lines: () => [`배치한 그림자는 <em>끌어서</em> 옮길 수 있습니다 (배치 준비 중 무료 · 전투 중 에너지 ${GAME_DATA.config.moveCost}).`,
+      `그림자를 <em>클릭</em>해 해체하면 쓴 에너지의 ${Math.round(GAME_DATA.config.dismantleRefundRate * 100)}%를 돌려받습니다.`,
+      '조작법은 언제든 <em>H</em> 키로 다시 볼 수 있습니다.'],
+    setup(d) { d.state.status = STATUS.PREPARATION; d.unit(380, 235); },
+    cursor: [[0, 270, 350], [1, 382, 235], [1.4, 382, 235], [2.9, 300, 320], [5, 300, 320]], clicks: [1.2], press: [1.2, 3.2],
+    tick(d, t) {
+      const u = d.state.basicUnits[0], c = d.cursorAt(t);
+      d.view.drag = t >= 1.2 && t < 3.2 ? { uid: u.uid, active: true, x: c.x, y: c.y } : null;
+      d.once(3.2, () => moveShadow(d.state, u.uid, 300, 320));
+    },
+  },
+];
+
+const tutorial = { page: 0, demo: null, buf: null, review: false };   // review: 조작법 창에서 다시 보는 중
+
+function makeTutorialDemo(page) {
+  const scene = TUTORIAL[page];
+  const d = {
+    scene, t: 0, acc: 0, fired: {}, ui: {},
+    state: createInitialState(GAME_DATA.chapters[0].chapterId, baseShadowIds()),
+    view: { mouse: null, hoverRemnantUid: null, hoverUnitUid: null, showRanges: false, time: 0, crackFlash: [0, 0, 0, 0],
+      energyOrbs: [], energyTarget: { x: TUT_X + 92, y: TUT_Y + 24 }, onEnergyArrive: null, drag: null },
+    once(at, fn) { if (this.t >= at && !this.fired[at]) { this.fired[at] = true; fn(); } },
+    battle() {   // 전투 상태: 이 웨이브의 적은 나오지 않고(타이머를 멀리), 웨이브도 끝나지 않음
+      this.state.status = STATUS.PLAYING;
+      this.state.spawnTimer = 9999;
+    },
+    unit(x, y) { const r = this.state.status; this.state.status = STATUS.PREPARATION; const e = this.state.energy; this.state.energy = this.state.maxEnergy; summonShadow(this.state, 'SH_002', x, y); this.state.energy = e; this.state.status = r; },
+    enemy(x, y) { const e = createEnemy(this.state, 'EN_001', 3); e.x = x; e.y = y; e.revealed = true; this.state.enemies.push(e); return e; },
+    cursorAt(t) {
+      const k = scene.cursor;
+      let i = 0;
+      while (i < k.length - 2 && t > k[i + 1][0]) i += 1;
+      const [t0, x0, y0] = k[i], [t1, x1, y1] = k[i + 1];
+      const p = Math.max(0, Math.min(1, (t - t0) / (t1 - t0))), q = p * p * (3 - 2 * p);
+      return { x: x0 + (x1 - x0) * q, y: y0 + (y1 - y0) * q };
+    },
+  };
+  scene.setup(d);
+  return d;
+}
+
+function openModal(kind) {
+  tutorial.review = game.modal === 'help';
+  game.modal = kind;
+  game.view.drag = null;
+  hideToast();
+  setHidden($('modal-tutorial'), kind !== 'tutorial');
+  setHidden($('modal-help'), kind !== 'help');
+  if (kind === 'tutorial') showTutorialPage(0);
+  else $('btn-help-close').focus({ preventScroll: true });
+  sfx('panel');
+}
+
+function closeModal() {
+  if (!game.modal) return;
+  const was = game.modal;
+  game.modal = null;
+  setHidden($('modal-tutorial'), true);
+  setHidden($('modal-help'), true);
+  tutorial.demo = null;
+  if (document.activeElement) document.activeElement.blur();   // 스페이스·엔터가 가려진 버튼을 누르지 않게
+  sfx('back');
+  if (was === 'tutorial' && !game.save.tutorialSeen) { game.save.tutorialSeen = true; persistSave(); }
+}
+
+function showTutorialPage(page) {
+  tutorial.page = page;
+  tutorial.demo = makeTutorialDemo(page);
+  const scene = TUTORIAL[page], last = page === TUTORIAL.length - 1;
+  setText($('tut-count'), `튜토리얼 ${page + 1} / ${TUTORIAL.length}`);
+  setText($('tut-title'), scene.title);
+  $('tut-lines').innerHTML = scene.lines().map((t) => `<p>${t}</p>`).join('');
+  $('tut-dots').innerHTML = TUTORIAL.map((_, i) => `<i class="${i === page ? 'on' : ''}"></i>`).join('');
+  $('btn-tut-prev').style.visibility = page === 0 ? 'hidden' : '';
+  $('btn-tut-skip').style.visibility = last ? 'hidden' : '';
+  setText($('btn-tut-next'), last ? (tutorial.review ? '닫기' : '시작하기') : '다음');
+  $('btn-tut-next').focus({ preventScroll: true });   // Enter·Space로 넘기기
+}
+
+function tutorialGo(step) {
+  const next = tutorial.page + step;
+  if (next >= TUTORIAL.length) { closeModal(); return; }
+  if (next < 0) return;
+  sfx('select');
+  showTutorialPage(next);
+}
+
+function onModalKey(evt, key) {
+  if (key === 'm') toggleBgm();
+  else if (key === 'n') toggleSfx();
+  else if (key === 'escape') closeModal();
+  else if (key === 'h' && game.modal === 'help') closeModal();
+  else if (game.modal === 'tutorial' && key === 'arrowright') { if (tutorial.page < TUTORIAL.length - 1) tutorialGo(1); }
+  else if (game.modal === 'tutorial' && key === 'arrowleft') tutorialGo(-1);
+}
+
+// 튜토리얼 그림 한 프레임: 장면을 진행 → 전장 전체를 작은 버퍼에 그림 → 필요한 곳만 잘라 옮기고 커서·카드·창을 덧그림
+function drawTutorialDemo(delta) {
+  const d = tutorial.demo;
+  if (game.modal !== 'tutorial' || !d) return;
+  const F = GAME_DATA.field, cv = $('tut-canvas'), dpr = Math.min(2, window.devicePixelRatio || 1);
+  if (cv.width !== TUT_W * dpr) { cv.width = TUT_W * dpr; cv.height = TUT_H * dpr; }
+  if (!tutorial.buf) tutorial.buf = document.createElement('canvas');
+  const buf = tutorial.buf;
+  if (buf.width !== F.width * dpr) { buf.width = F.width * dpr; buf.height = F.height * dpr; }
+
+  d.t += delta;
+  if (d.t >= d.scene.dur) { tutorial.demo = makeTutorialDemo(tutorial.page); return; }   // 처음부터 반복
+  d.view.time = game.view.time;
+  const step = GAME_DATA.config.fixedStep;
+  d.acc += delta;
+  while (d.acc >= step) { updateGame(d.state, step); d.acc -= step; }
+  d.scene.tick(d, d.t);
+  for (const ev of d.state.events) {   // 처치한 자리에서 에너지 칸으로 날아가는 구슬
+    if (!ev.startsWith('ENERGY:kill')) continue;
+    const [, , amount, gained, x, y] = ev.split(':');
+    d.view.energyOrbs.push({ x: +x, y: +y, t0: d.view.time, gained: +gained, full: +gained < +amount, seed: 7, arrived: false });
+  }
+  d.state.events.length = 0;
+
+  render(buf.getContext('2d'), d.state, d.view);
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(buf, TUT_X * dpr, TUT_Y * dpr, TUT_W * dpr, TUT_H * dpr, 0, 0, TUT_W * dpr, TUT_H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, -TUT_X * dpr, -TUT_Y * dpr);   // 이후 전장 좌표로 덧그림
+  if (d.ui.card) drawTutCard(ctx, d);
+  if (d.ui.energy) drawTutEnergy(ctx, d);
+  if (d.ui.popup) drawTutPopup(ctx, d);
+  if (d.scene.cursor && !(d.scene.hideCursor && d.t > d.scene.hideCursor)) drawTutCursor(ctx, d);
+  const fade = Math.max(0, 1 - d.t / 0.3, 1 - (d.scene.dur - d.t) / 0.3);   // 반복되는 이음매는 짧게 어두워짐
+  if (fade > 0) { ctx.fillStyle = `rgba(5, 9, 18, ${fade})`; ctx.fillRect(TUT_X, TUT_Y, TUT_W, TUT_H); }
+}
+
+function drawTutBox(ctx, x, y, w, h, line) {
+  ctx.fillStyle = 'rgba(10, 19, 36, 0.94)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = line;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+}
+function drawTutText(ctx, text, x, y, color, size = 11, align = 'left') {
+  ctx.font = `${size}px Galmuri11, sans-serif`;
+  ctx.textAlign = align;
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = color;
+  ctx.fillText(text, x, y);
+}
+function drawTutCard(ctx, d) {
+  const c = TUT_CARD, sh = findShadowData('SH_002'), on = d.state.selectedShadowId === sh.id;
+  drawTutBox(ctx, c.x, c.y, c.w, c.h, on ? sh.color : '#1f4a7a');
+  if (!tutorial.cardImg) { tutorial.cardImg = new Image(); tutorial.cardImg.src = sh.cardImage; }
+  const img = tutorial.cardImg;
+  if (img.complete && img.naturalWidth) {   // 오른쪽에 카드 그림 (얼굴 쪽)
+    const w = 60, sh2 = img.naturalHeight, sw = Math.min(img.naturalWidth, sh2 * w / (c.h - 4));
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(img, img.naturalWidth - sw, 0, sw, sh2, c.x + c.w - w - 2, c.y + 2, w, c.h - 4);
+  }
+  ctx.fillStyle = sh.color;
+  ctx.fillRect(c.x + 2, c.y + 2, 4, c.h - 4);
+  drawTutText(ctx, sh.name, c.x + 12, c.y + 17, '#dbe8ff');
+  drawTutText(ctx, `에너지 ${sh.cost}`, c.x + 12, c.y + 35, '#8fd8ff');
+}
+function drawTutEnergy(ctx, d) {
+  drawTutBox(ctx, TUT_X + 10, TUT_Y + 10, 164, 26, 'rgba(183, 140, 255, 0.8)');
+  drawTutText(ctx, '그림자 에너지', TUT_X + 20, TUT_Y + 23, '#8ea6c8');
+  drawTutText(ctx, `${d.state.energy} / ${d.state.maxEnergy}`, TUT_X + 164, TUT_Y + 23, '#dccbff', 11, 'right');
+}
+function drawTutPopup(ctx, d) {
+  const x = 284, y = 238, cost = findExtractionData('EN_001').cost;
+  drawTutBox(ctx, x, y, 124, 78, '#4fb4ff');
+  drawTutText(ctx, '그림자 추출', x + 62, y + 15, '#eaf4ff', 11, 'center');
+  drawTutText(ctx, `추출 비용: 에너지 ${cost}`, x + 62, y + 33, '#c6f35a', 11, 'center');
+  ctx.fillStyle = '#1c5fb8';
+  ctx.fillRect(x + 14, y + 46, 96, 24);
+  ctx.strokeStyle = '#8fd8ff';
+  ctx.strokeRect(x + 15, y + 47, 94, 22);
+  drawTutText(ctx, '일어나라!  E', x + 62, y + 58, '#ffffff', 11, 'center');
+}
+function drawTutCursor(ctx, d) {
+  const c = d.cursorAt(d.t), hold = d.scene.press && d.t >= d.scene.press[0] && d.t < d.scene.press[1];
+  for (const at of d.scene.clicks) {   // 누르는 순간 퍼지는 고리
+    const p = (d.t - at) / 0.4;
+    if (p < 0 || p >= 1) continue;
+    ctx.strokeStyle = `rgba(143, 216, 255, ${1 - p})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(c.x, c.y, 4 + 14 * p, 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.save();
+  ctx.translate(c.x, c.y);
+  if (hold) ctx.scale(0.88, 0.88);
+  ctx.beginPath();
+  [[0, 0], [0, 17], [4, 13], [7, 20], [10, 19], [7, 12], [13, 12]].forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+  ctx.closePath();
+  ctx.fillStyle = hold ? '#8fd8ff' : '#ffffff';
+  ctx.strokeStyle = '#050912';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fill();
+  ctx.restore();
+}
+
+// 조작법 창의 내용 (수치는 데이터에서)
+function buildHelp() {
+  const C = GAME_DATA.config, groups = [
+    ['배치', [['1 ~ 6', '카드 선택'], ['좌클릭', '전장 빈 곳에 배치'], ['끌기', `기본 그림자 옮기기<small>준비 중 무료 · 전투 중 에너지 ${C.moveCost}</small>`], ['우클릭', '방금 배치한 그림자 회수<small>배치 준비 중 · 에너지 전액</small>']]],
+    ['추출 · 해체', [['잔영 클릭', '추출 창 열기'], ['E / Space', '추출 (일어나라!)'], ['그림자 클릭', `정보 · 해체<small>쓴 에너지의 ${Math.round(C.dismantleRefundRate * 100)}% 반환</small>`], ['Esc / 우클릭', '선택 해제']]],
+    ['화면', [['P / Esc', '일시정지<small>배치 준비 중에는 메뉴</small>'], ['D', '범위 표시'], ['H', '조작법']]],
+    ['소리', [['M', '배경 음악 켜기 / 끄기'], ['N', '효과음 켜기 / 끄기']]],
+  ];
+  $('help-list').innerHTML = groups.map(([name, rows]) => `<section><h3>${name}</h3><dl>${rows.map(([k, t]) => `<dt>${k.split(' / ').map((x) => `<span class="kbd">${x}</span>`).join(' ')}</dt><dd>${t}</dd>`).join('')}</dl></section>`).join('');
+}
+
+
 /* ==================================================================
  * [7] 게임 루프 & 부팅
  *  - requestAnimationFrame 루프는 boot()에서 1번만 시작 (재시작해도 새로 만들지 않음)
@@ -5994,7 +6378,7 @@ function syncUI() {
 function syncBgm(state) {
   if (typeof Bgm === 'undefined') return;
   const bossOn = state.boss && state.boss.phase === 'active';   // 보스가 살아 있으면 그 챕터 곡의 보스전 버전
-  Bgm.update(state.status === STATUS.READY ? 'title' : 'ch' + state.chapterId + (bossOn ? '_boss' : ''), state.status === STATUS.PAUSED, state.status === STATUS.DEFEAT);
+  Bgm.update(state.status === STATUS.READY ? 'title' : 'ch' + state.chapterId + (bossOn ? '_boss' : ''), state.status === STATUS.PAUSED || !!game.modal, state.status === STATUS.DEFEAT);
 }
 function toggleBgm() {
   if (typeof Bgm === 'undefined') return;
@@ -6028,6 +6412,7 @@ function frame(now) {
   const step = GAME_DATA.config.fixedStep;
   game.accumulator += delta;
   let steps = 0;
+  if (game.modal) game.accumulator = 0;   // 튜토리얼·조작법 창이 열려 있으면 전투와 잔영 시간이 멈춤
   while (game.accumulator >= step && steps < 30) {
     updateGame(game.state, step);
     game.accumulator -= step;
@@ -6041,6 +6426,7 @@ function frame(now) {
 
   render(game.ctx, game.state, game.view);
   syncUI();
+  drawTutorialDemo(delta);
   syncBgm(game.state);
   requestAnimationFrame(frame);
 }
@@ -6072,7 +6458,8 @@ function boot() {
     btnResultPrimary: $('btn-result-primary'), btnResultTitle: $('btn-result-title'),
     lowHpVignette: $('low-hp-vignette'),
     overlayChapters: $('overlay-chapters'), chapterList: $('chapter-list'),
-    btnPause: $('btn-pause'), overlayPause: $('overlay-pause'), pauseStats: $('pause-stats'),
+    btnPause: $('btn-pause'), btnPauseLabel: $('btn-pause-label'), overlayPause: $('overlay-pause'), pauseStats: $('pause-stats'),
+    pauseTitle: $('pause-title'), pauseDesc: $('pause-desc'),
   };
 
   game.save = loadSave();
@@ -6135,6 +6522,13 @@ function boot() {
   $('btn-resume').addEventListener('click', onResume);
   $('btn-pause-restart').addEventListener('click', () => newGame());   // 이 챕터를 웨이브 1부터 (이어하기 진행 삭제)
   $('btn-pause-title').addEventListener('click', goToChapters);   // 이어하기는 마지막으로 클리어한 웨이브부터
+  buildHelp();
+  $('btn-help').addEventListener('click', () => openModal('help'));
+  $('btn-help-close').addEventListener('click', () => closeModal());
+  $('btn-help-tutorial').addEventListener('click', () => openModal('tutorial'));
+  $('btn-tut-skip').addEventListener('click', () => closeModal());
+  $('btn-tut-prev').addEventListener('click', () => tutorialGo(-1));
+  $('btn-tut-next').addEventListener('click', () => tutorialGo(1));
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('resize', fitCanvasToScreen);
   fitCanvasToScreen();
